@@ -38,6 +38,20 @@ gamesRouter.post('/:id/start', async (c) => {
   return c.json({ success: true })
 })
 
+gamesRouter.get('/:id/market', async (c) => {
+  const gameId = c.req.param('id')
+  const { results: prices } = await c.env.PROHIBITIONDB.prepare(
+    `SELECT mp.city_id, mp.alcohol_type, mp.price, mp.season,
+            gc.demand_index
+     FROM market_prices mp
+     JOIN game_cities gc ON mp.city_id = gc.id
+     WHERE mp.game_id = ?
+     ORDER BY mp.city_id, mp.alcohol_type`
+  ).bind(gameId).all()
+
+  return c.json({ success: true, data: { prices } })
+})
+
 gamesRouter.get('/:id/map', async (c) => {
   const gameId = c.req.param('id')
   const { results: cities } = await c.env.PROHIBITIONDB.prepare(
