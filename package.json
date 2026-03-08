@@ -36,6 +36,7 @@
     "wrangler": "^4.71.0"
   },
   "dependencies": {
+    "@tailwindcss/vite": "^4.2.1",
     "bcryptjs": "^3.0.3",
     "hono": "^4.12.5",
     "phaser": "^3.90.0",
