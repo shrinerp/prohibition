@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { authRouter } from './routes/auth'
 
 export interface Env {
   PROHIBITIONDB: D1Database
@@ -10,5 +11,6 @@ export interface Env {
 const app = new Hono<{ Bindings: Env }>()
 
 app.get('/health', (c) => c.json({ ok: true, service: 'prohibition', ts: Date.now() }))
+app.route('/auth', authRouter)
 
 export default app
