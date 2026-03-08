@@ -37,3 +37,20 @@ gamesRouter.post('/:id/start', async (c) => {
   if (!result.success) return c.json({ success: false, message: result.message }, 400)
   return c.json({ success: true })
 })
+
+gamesRouter.get('/:id/map', async (c) => {
+  const gameId = c.req.param('id')
+  const { results: cities } = await c.env.PROHIBITIONDB.prepare(
+    `SELECT gc.id, cp.name, cp.region, cp.primary_alcohol, gc.demand_index,
+            cp.is_coastal, cp.population_tier, gc.owner_player_id, gc.bribe_player_id, gc.bribe_expires_season
+     FROM game_cities gc
+     JOIN city_pool cp ON gc.city_pool_id = cp.id
+     WHERE gc.game_id = ?`
+  ).bind(gameId).all()
+
+  const { results: roads } = await c.env.PROHIBITIONDB.prepare(
+    `SELECT from_city_id, to_city_id, distance_value FROM roads WHERE game_id = ?`
+  ).bind(gameId).all()
+
+  return c.json({ success: true, data: { cities, roads } })
+})
