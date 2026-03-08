@@ -1,0 +1,9 @@
+# Copy to .dev.vars and fill in values for local development
+# Never commit .dev.vars
+
+# AES-GCM encryption key for passwords (base64-encoded 32-byte key)
+ENCRYPTION_KEY=
+
+# 3mails notification service
+MAILS_API_KEY=
+MAILS_ENDPOINT=

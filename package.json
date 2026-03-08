@@ -1,0 +1,40 @@
+{
+  "name": "prohibition",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate": "wrangler d1 migrations apply prohibition",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shrinerp/prohibition.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/shrinerp/prohibition/issues"
+  },
+  "homepage": "https://github.com/shrinerp/prohibition#readme",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260307.1",
+    "@vitejs/plugin-react": "^5.1.4",
+    "autoprefixer": "^10.4.27",
+    "tailwindcss": "^4.2.1",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.71.0"
+  },
+  "dependencies": {
+    "hono": "^4.12.5",
+    "phaser": "^3.90.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  }
+}
