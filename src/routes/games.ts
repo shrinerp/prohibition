@@ -38,6 +38,37 @@ gamesRouter.post('/:id/start', async (c) => {
   return c.json({ success: true })
 })
 
+gamesRouter.post('/:id/turn', async (c) => {
+  const gameId  = c.req.param('id')
+  const userId  = c.get('userId')
+  const actions = await c.req.json<unknown[]>()
+
+  // Verify it's this player's turn
+  const playerRow = await c.env.PROHIBITIONDB.prepare(
+    `SELECT gp.id, gp.turn_order, g.current_turn_player_index, g.current_season, g.status, g.turn_started_at
+     FROM game_players gp
+     JOIN games g ON g.id = gp.game_id
+     WHERE gp.game_id = ? AND gp.user_id = ?`
+  ).bind(gameId, userId).first<{
+    id: number; turn_order: number; current_turn_player_index: number;
+    current_season: number; status: string; turn_started_at: number | null
+  }>()
+
+  if (!playerRow) return c.json({ success: false, message: 'Not in game' }, 403)
+  if (playerRow.status !== 'active') return c.json({ success: false, message: 'Game not active' }, 400)
+  if (playerRow.turn_order !== playerRow.current_turn_player_index) {
+    return c.json({ success: false, message: 'Not your turn' }, 400)
+  }
+
+  // Record turn actions in the turns table
+  await c.env.PROHIBITIONDB.prepare(
+    `INSERT INTO turns (game_id, player_id, season, actions_json, submitted_at)
+     VALUES (?, ?, ?, ?, unixepoch())`
+  ).bind(gameId, playerRow.id, playerRow.current_season, JSON.stringify(actions)).run()
+
+  return c.json({ success: true, message: 'Turn submitted — resolution pending' })
+})
+
 gamesRouter.get('/:id/market', async (c) => {
   const gameId = c.req.param('id')
   const { results: prices } = await c.env.PROHIBITIONDB.prepare(
