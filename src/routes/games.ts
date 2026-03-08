@@ -83,6 +83,16 @@ gamesRouter.get('/:id/market', async (c) => {
   return c.json({ success: true, data: { prices } })
 })
 
+gamesRouter.get('/:id/recap', async (c) => {
+  const gameId = c.req.param('id')
+  const row = await c.env.PROHIBITIONDB.prepare(
+    `SELECT recap_markdown FROM games WHERE id = ? AND status = 'ended'`
+  ).bind(gameId).first<{ recap_markdown: string | null }>()
+
+  if (!row) return c.json({ success: false, message: 'Game not found or not ended' }, 404)
+  return c.json({ success: true, data: { recap: row.recap_markdown } })
+})
+
 gamesRouter.get('/:id/map', async (c) => {
   const gameId = c.req.param('id')
   const { results: cities } = await c.env.PROHIBITIONDB.prepare(
