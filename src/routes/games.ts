@@ -83,6 +83,79 @@ gamesRouter.get('/:id/market', async (c) => {
   return c.json({ success: true, data: { prices } })
 })
 
+gamesRouter.get('/:id/state', async (c) => {
+  const gameId = c.req.param('id')
+  const userId = c.get('userId')
+
+  const game = await c.env.PROHIBITIONDB.prepare(
+    `SELECT id, status, current_season, current_player_index, turn_deadline, player_count
+     FROM games WHERE id = ?`
+  ).bind(gameId).first<{
+    id: string; status: string; current_season: number;
+    current_player_index: number; turn_deadline: string | null; player_count: number
+  }>()
+  if (!game) return c.json({ success: false, message: 'Game not found' }, 404)
+
+  const player = await c.env.PROHIBITIONDB.prepare(
+    `SELECT gp.id, gp.turn_order, gp.character_class, gp.vehicle, gp.cash, gp.heat,
+            gp.jail_until_season, gp.current_city_id, gp.home_city_id, gp.adjustment_cards
+     FROM game_players gp
+     WHERE gp.game_id = ? AND gp.user_id = ?`
+  ).bind(gameId, userId).first<{
+    id: number; turn_order: number; character_class: string; vehicle: string;
+    cash: number; heat: number; jail_until_season: number | null;
+    current_city_id: number | null; home_city_id: number | null; adjustment_cards: number
+  }>()
+  if (!player) return c.json({ success: false, message: 'Not in game' }, 403)
+
+  const { results: players } = await c.env.PROHIBITIONDB.prepare(
+    `SELECT gp.id, gp.turn_order, gp.character_class, gp.is_npc, gp.current_city_id, gp.cash,
+            u.email
+     FROM game_players gp LEFT JOIN users u ON gp.user_id = u.id
+     WHERE gp.game_id = ? ORDER BY gp.turn_order`
+  ).bind(gameId).all<{
+    id: number; turn_order: number; character_class: string; is_npc: number;
+    current_city_id: number | null; cash: number; email: string | null
+  }>()
+
+  const { results: inventory } = await c.env.PROHIBITIONDB.prepare(
+    `SELECT alcohol_type, quantity FROM inventory WHERE player_id = ?`
+  ).bind(player.id).all<{ alcohol_type: string; quantity: number }>()
+
+  return c.json({
+    success: true,
+    data: {
+      game: {
+        status:               game.status,
+        currentSeason:        game.current_season,
+        currentPlayerIndex:   game.current_player_index,
+        turnDeadline:         game.turn_deadline
+      },
+      player: {
+        id:               player.id,
+        turnOrder:        player.turn_order,
+        characterClass:   player.character_class,
+        vehicle:          player.vehicle,
+        cash:             player.cash,
+        heat:             player.heat,
+        jailUntilSeason:  player.jail_until_season,
+        currentCityId:    player.current_city_id,
+        homeCityId:       player.home_city_id,
+        adjustmentCards:  player.adjustment_cards,
+        inventory:        inventory
+      },
+      players: players.map(p => ({
+        id:            p.id,
+        turnOrder:     p.turn_order,
+        characterClass: p.character_class,
+        isNpc:         p.is_npc === 1,
+        currentCityId: p.current_city_id,
+        name:          p.is_npc ? `NPC ${p.turn_order + 1}` : (p.email?.split('@')[0] ?? 'Player')
+      }))
+    }
+  })
+})
+
 gamesRouter.get('/:id/recap', async (c) => {
   const gameId = c.req.param('id')
   const row = await c.env.PROHIBITIONDB.prepare(
