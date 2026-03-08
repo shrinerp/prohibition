@@ -30,6 +30,7 @@ interface FullState {
   game: {
     status: string; currentSeason: number
     currentPlayerIndex: number; turnDeadline: string | null
+    inviteCode: string; isHost: boolean
   }
   player: {
     id: number; turnOrder: number; characterClass: string; vehicle: string
@@ -134,6 +135,11 @@ export default function GamePage() {
     }))
 
   // ── Actions ────────────────────────────────────────────────────────────────
+  async function startGame() {
+    await fetch(`/api/games/${gameId}/start`, { method: 'POST' })
+    fetchAll()
+  }
+
   async function submitTurn(actions: unknown[]) {
     await fetch(`/api/games/${gameId}/turn`, {
       method:  'POST',
@@ -161,6 +167,38 @@ export default function GamePage() {
       <p className="text-red-400">{error}</p>
     </div>
   )
+
+  // ── Lobby screen ───────────────────────────────────────────────────────────
+  if (game?.status === 'lobby') {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen gap-6 p-8">
+        <h2 className="text-3xl font-bold text-amber-400">Waiting for Players</h2>
+        <div className="bg-stone-800 border border-stone-600 rounded p-4 text-center">
+          <p className="text-stone-400 text-xs uppercase tracking-wider mb-1">Invite Code</p>
+          <p className="text-2xl font-mono font-bold text-amber-300">{game.inviteCode}</p>
+        </div>
+        <div className="bg-stone-800 border border-stone-600 rounded p-4 min-w-64">
+          <p className="text-stone-400 text-xs uppercase tracking-wider mb-2">Players Joined</p>
+          {(fullState?.players ?? []).map((p, i) => (
+            <div key={p.id} className="flex items-center gap-2 py-1 text-sm">
+              <div className="w-2 h-2 rounded-full" style={{ background: PLAYER_COLORS[i % PLAYER_COLORS.length] }} />
+              <span className={p.id === player?.id ? 'text-amber-400' : 'text-stone-300'}>{p.name}</span>
+            </div>
+          ))}
+        </div>
+        {game.isHost ? (
+          <button
+            onClick={startGame}
+            className="px-8 py-3 bg-amber-600 hover:bg-amber-500 text-stone-900 font-bold rounded uppercase tracking-wide transition"
+          >
+            Start Game
+          </button>
+        ) : (
+          <p className="text-stone-500 italic">Waiting for host to start…</p>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col h-screen overflow-hidden">

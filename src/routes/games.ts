@@ -45,18 +45,18 @@ gamesRouter.post('/:id/turn', async (c) => {
 
   // Verify it's this player's turn
   const playerRow = await c.env.PROHIBITIONDB.prepare(
-    `SELECT gp.id, gp.turn_order, g.current_turn_player_index, g.current_season, g.status, g.turn_started_at
+    `SELECT gp.id, gp.turn_order, g.current_player_index, g.current_season, g.status, g.turn_started_at
      FROM game_players gp
      JOIN games g ON g.id = gp.game_id
      WHERE gp.game_id = ? AND gp.user_id = ?`
   ).bind(gameId, userId).first<{
-    id: number; turn_order: number; current_turn_player_index: number;
+    id: number; turn_order: number; current_player_index: number;
     current_season: number; status: string; turn_started_at: number | null
   }>()
 
   if (!playerRow) return c.json({ success: false, message: 'Not in game' }, 403)
   if (playerRow.status !== 'active') return c.json({ success: false, message: 'Game not active' }, 400)
-  if (playerRow.turn_order !== playerRow.current_turn_player_index) {
+  if (playerRow.turn_order !== playerRow.current_player_index) {
     return c.json({ success: false, message: 'Not your turn' }, 400)
   }
 
@@ -88,11 +88,12 @@ gamesRouter.get('/:id/state', async (c) => {
   const userId = c.get('userId')
 
   const game = await c.env.PROHIBITIONDB.prepare(
-    `SELECT id, status, current_season, current_player_index, turn_deadline, player_count
+    `SELECT id, status, current_season, current_player_index, turn_deadline, player_count, invite_code, host_user_id
      FROM games WHERE id = ?`
   ).bind(gameId).first<{
     id: string; status: string; current_season: number;
     current_player_index: number; turn_deadline: string | null; player_count: number
+    invite_code: string; host_user_id: number
   }>()
   if (!game) return c.json({ success: false, message: 'Game not found' }, 404)
 
@@ -129,7 +130,9 @@ gamesRouter.get('/:id/state', async (c) => {
         status:               game.status,
         currentSeason:        game.current_season,
         currentPlayerIndex:   game.current_player_index,
-        turnDeadline:         game.turn_deadline
+        turnDeadline:         game.turn_deadline,
+        inviteCode:           game.invite_code,
+        isHost:               game.host_user_id === userId
       },
       player: {
         id:               player.id,
