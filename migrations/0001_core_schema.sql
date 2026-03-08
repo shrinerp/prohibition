@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS games (
   id TEXT PRIMARY KEY,           -- UUID
   invite_code TEXT NOT NULL UNIQUE,
   status TEXT NOT NULL DEFAULT 'lobby',  -- lobby | active | ended
+  host_user_id INTEGER REFERENCES users(id),
+  player_count INTEGER NOT NULL DEFAULT 1,
   current_player_index INTEGER NOT NULL DEFAULT 0,
   current_season INTEGER NOT NULL DEFAULT 1,  -- 1-52
   turn_deadline TEXT,            -- ISO timestamp, 24h window
