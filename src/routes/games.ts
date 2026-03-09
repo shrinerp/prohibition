@@ -45,13 +45,13 @@ gamesRouter.post('/:id/turn', async (c) => {
 
   // Verify it's this player's turn
   const playerRow = await c.env.PROHIBITIONDB.prepare(
-    `SELECT gp.id, gp.turn_order, g.current_player_index, g.current_season, g.status, g.turn_started_at
+    `SELECT gp.id, gp.turn_order, g.current_player_index, g.current_season, g.status
      FROM game_players gp
      JOIN games g ON g.id = gp.game_id
      WHERE gp.game_id = ? AND gp.user_id = ?`
   ).bind(gameId, userId).first<{
     id: number; turn_order: number; current_player_index: number;
-    current_season: number; status: string; turn_started_at: number | null
+    current_season: number; status: string
   }>()
 
   if (!playerRow) return c.json({ success: false, message: 'Not in game' }, 403)
