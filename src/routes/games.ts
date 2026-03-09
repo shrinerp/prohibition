@@ -62,8 +62,8 @@ gamesRouter.post('/:id/turn', async (c) => {
 
   // Record turn actions in the turns table
   await c.env.PROHIBITIONDB.prepare(
-    `INSERT INTO turns (game_id, player_id, season, actions_json, submitted_at)
-     VALUES (?, ?, ?, ?, unixepoch())`
+    `INSERT INTO turns (game_id, player_id, season, actions)
+     VALUES (?, ?, ?, ?)`
   ).bind(gameId, playerRow.id, playerRow.current_season, JSON.stringify(actions)).run()
 
   return c.json({ success: true, message: 'Turn submitted — resolution pending' })
