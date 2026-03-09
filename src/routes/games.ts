@@ -45,13 +45,13 @@ gamesRouter.post('/:id/turn', async (c) => {
 
   // Verify it's this player's turn
   const playerRow = await c.env.PROHIBITIONDB.prepare(
-    `SELECT gp.id, gp.turn_order, g.current_player_index, g.current_season, g.status
+    `SELECT gp.id, gp.turn_order, g.current_player_index, g.current_season, g.status, g.player_count
      FROM game_players gp
      JOIN games g ON g.id = gp.game_id
      WHERE gp.game_id = ? AND gp.user_id = ?`
   ).bind(gameId, userId).first<{
     id: number; turn_order: number; current_player_index: number;
-    current_season: number; status: string
+    current_season: number; status: string; player_count: number
   }>()
 
   if (!playerRow) return c.json({ success: false, message: 'Not in game' }, 403)
@@ -60,13 +60,47 @@ gamesRouter.post('/:id/turn', async (c) => {
     return c.json({ success: false, message: 'Not your turn' }, 400)
   }
 
-  // Record turn actions in the turns table
+  // Record turn
   await c.env.PROHIBITIONDB.prepare(
     `INSERT INTO turns (game_id, player_id, season, actions)
      VALUES (?, ?, ?, ?)`
   ).bind(gameId, playerRow.id, playerRow.current_season, JSON.stringify(actions)).run()
 
-  return c.json({ success: true, message: 'Turn submitted — resolution pending' })
+  // Resolve actions
+  for (const action of actions as Array<{ type: string; targetPath?: number[] }>) {
+    if (action.type === 'move' && action.targetPath && action.targetPath.length > 0) {
+      const dest = action.targetPath[action.targetPath.length - 1]
+      await c.env.PROHIBITIONDB.prepare(
+        `UPDATE game_players SET current_city_id = ? WHERE id = ?`
+      ).bind(dest, playerRow.id).run()
+    }
+  }
+
+  // Advance turn index, wrapping back to 0 and bumping season when all players have gone
+  let nextIndex  = (playerRow.current_player_index + 1) % playerRow.player_count
+  let nextSeason = playerRow.current_season + (nextIndex === 0 ? 1 : 0)
+
+  // Auto-skip NPC players so the next human always sees it as their turn
+  const SAFETY = playerRow.player_count
+  for (let i = 0; i < SAFETY; i++) {
+    const next = await c.env.PROHIBITIONDB.prepare(
+      `SELECT id, is_npc FROM game_players WHERE game_id = ? AND turn_order = ?`
+    ).bind(gameId, nextIndex).first<{ id: number; is_npc: number }>()
+    if (!next || !next.is_npc) break
+
+    await c.env.PROHIBITIONDB.prepare(
+      `INSERT INTO turns (game_id, player_id, season, actions, skipped) VALUES (?, ?, ?, ?, 1)`
+    ).bind(gameId, next.id, nextSeason, JSON.stringify([{ type: 'skip' }])).run()
+
+    nextIndex  = (nextIndex + 1) % playerRow.player_count
+    nextSeason += nextIndex === 0 ? 1 : 0
+  }
+
+  await c.env.PROHIBITIONDB.prepare(
+    `UPDATE games SET current_player_index = ?, current_season = ? WHERE id = ?`
+  ).bind(nextIndex, nextSeason, gameId).run()
+
+  return c.json({ success: true })
 })
 
 gamesRouter.get('/:id/market', async (c) => {
