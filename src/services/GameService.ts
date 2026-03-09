@@ -101,12 +101,13 @@ export class GameService {
     // Fetch the inserted city rows so we can generate roads with real IDs
     const { results: gameCities } = await this.env.PROHIBITIONDB.prepare(
       `SELECT gc.id, cp.name, cp.region, cp.primary_alcohol, cp.population_tier, cp.is_coastal,
-              gc.demand_index
+              gc.demand_index, cp.lat, cp.lon
        FROM game_cities gc JOIN city_pool cp ON gc.city_pool_id = cp.id
        WHERE gc.game_id = ?`
     ).bind(gameId).all<{
-      id: number; name: string; region: string; primaryAlcohol?: string;
+      id: number; name: string; region: string;
       primary_alcohol: string; population_tier: string; is_coastal: number; demand_index: number
+      lat: number; lon: number
     }>()
 
     // Build CityNode list using game_city IDs (not pool IDs)
@@ -117,7 +118,9 @@ export class GameService {
       primaryAlcohol: c.primary_alcohol,
       demandIndex:    c.demand_index,
       isCoastal:      c.is_coastal === 1,
-      populationTier: c.population_tier as 'small' | 'medium' | 'large' | 'major'
+      populationTier: c.population_tier as 'small' | 'medium' | 'large' | 'major',
+      lat:            c.lat,
+      lon:            c.lon
     }))
 
     const roads = generateRoads(cityNodes)

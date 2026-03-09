@@ -6,6 +6,8 @@ export interface CityNode {
   demandIndex: number
   isCoastal: boolean
   populationTier: 'small' | 'medium' | 'large' | 'major'
+  lat: number
+  lon: number
   ownerId?: number | null
   bribePlayerId?: number | null
   bribeExpiresSeason?: number | null
@@ -111,51 +113,68 @@ export function getShortestPath(graph: CityGraph, fromId: number, toId: number):
   return { path, totalCost: dist.get(toId) ?? 0 }
 }
 
-// Generate roads using a minimum spanning tree (Kruskal-inspired) + extra regional edges
+/**
+ * Generate roads using K-nearest geographic neighbours.
+ * Each city connects to its 4 closest cities by lat/lon distance,
+ * with road cost scaled from geographic distance (2–12 game points).
+ * A connectivity pass ensures no city is isolated.
+ */
 export function generateRoads(cities: CityNode[]): Road[] {
   if (cities.length === 0) return []
 
+  const seen = new Set<string>()
   const roads: Road[] = []
-  const regionGroups = new Map<string, CityNode[]>()
 
-  for (const city of cities) {
-    if (!regionGroups.has(city.region)) regionGroups.set(city.region, [])
-    regionGroups.get(city.region)!.push(city)
+  function edgeKey(a: number, b: number) {
+    return `${Math.min(a, b)}-${Math.max(a, b)}`
   }
 
-  // Connect cities within each region (chain)
-  for (const group of regionGroups.values()) {
-    for (let i = 0; i < group.length - 1; i++) {
-      roads.push({
-        fromCityId: group[i].id,
-        toCityId: group[i + 1].id,
-        distanceValue: randomCost(2, 5) // short regional hops
-      })
+  function geoDist(a: CityNode, b: CityNode): number {
+    const dlat = a.lat - b.lat
+    const dlon = (a.lon - b.lon) * Math.cos((a.lat + b.lat) * Math.PI / 360)
+    return Math.sqrt(dlat * dlat + dlon * dlon)
+  }
+
+  // Furthest reasonable pair in the continental US ≈ 48 degrees (Miami→Seattle)
+  const MAX_GEO = 48
+
+  function gameDistance(geo: number): number {
+    return Math.max(2, Math.min(12, Math.round(geo / MAX_GEO * 10 + 2)))
+  }
+
+  function addRoad(a: CityNode, b: CityNode) {
+    const k = edgeKey(a.id, b.id)
+    if (seen.has(k)) return
+    seen.add(k)
+    roads.push({ fromCityId: a.id, toCityId: b.id, distanceValue: gameDistance(geoDist(a, b)) })
+  }
+
+  // For each city, connect to its 4 nearest neighbours
+  const K = 4
+  for (const city of cities) {
+    const sorted = cities
+      .filter(c => c.id !== city.id)
+      .map(c => ({ city: c, dist: geoDist(city, c) }))
+      .sort((a, b) => a.dist - b.dist)
+
+    for (let i = 0; i < Math.min(K, sorted.length); i++) {
+      addRoad(city, sorted[i].city)
     }
   }
 
-  // Connect regions together (one bridge per adjacent region pair)
-  const regionList = Array.from(regionGroups.entries())
-  for (let i = 0; i < regionList.length - 1; i++) {
-    const [, groupA] = regionList[i]
-    const [, groupB] = regionList[i + 1]
-    const a = groupA[Math.floor(Math.random() * groupA.length)]
-    const b = groupB[Math.floor(Math.random() * groupB.length)]
-    roads.push({
-      fromCityId: a.id,
-      toCityId: b.id,
-      distanceValue: randomCost(8, 12) // longer cross-region routes
-    })
+  // Connectivity pass: if any city has no roads, connect it to its nearest neighbour
+  const connected = new Set<number>()
+  for (const r of roads) { connected.add(r.fromCityId); connected.add(r.toCityId) }
+  for (const city of cities) {
+    if (!connected.has(city.id)) {
+      const nearest = cities
+        .filter(c => c.id !== city.id)
+        .sort((a, b) => geoDist(city, a) - geoDist(city, b))[0]
+      if (nearest) addRoad(city, nearest)
+    }
   }
 
-  // Deduplicate
-  const seen = new Set<string>()
-  return roads.filter(r => {
-    const key = [Math.min(r.fromCityId, r.toCityId), Math.max(r.fromCityId, r.toCityId)].join('-')
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
+  return roads
 }
 
 function randomCost(min: number, max: number): number {

@@ -4,6 +4,7 @@ import type { AuthVariables } from '../middleware/sessionAuth'
 import { sessionAuth } from '../middleware/sessionAuth'
 import { GameService } from '../services/GameService'
 import { calculateEffectiveMovement, resolveMovement, type RoadSegment } from '../game/movement'
+import { generateRoads } from '../game/mapEngine'
 
 export const gamesRouter = new Hono<{ Bindings: Env; Variables: AuthVariables }>()
 
@@ -37,6 +38,47 @@ gamesRouter.post('/:id/start', async (c) => {
   const result = await svc.startGame(c.req.param('id'), c.get('userId'))
   if (!result.success) return c.json({ success: false, message: result.message }, 400)
   return c.json({ success: true })
+})
+
+// Regenerate roads for an active game (host only) — replaces old sparse roads with
+// K-nearest geographic neighbours giving each city 3-5 connections
+gamesRouter.post('/:id/regen-roads', async (c) => {
+  const gameId = c.req.param('id')
+  const userId = c.get('userId')
+
+  const game = await c.env.PROHIBITIONDB.prepare(
+    `SELECT host_user_id FROM games WHERE id = ?`
+  ).bind(gameId).first<{ host_user_id: number }>()
+  if (!game) return c.json({ success: false, message: 'Game not found' }, 404)
+  if (game.host_user_id !== userId) return c.json({ success: false, message: 'Host only' }, 403)
+
+  const { results: gameCities } = await c.env.PROHIBITIONDB.prepare(
+    `SELECT gc.id, cp.name, cp.region, cp.primary_alcohol, cp.population_tier,
+            cp.is_coastal, gc.demand_index, cp.lat, cp.lon
+     FROM game_cities gc JOIN city_pool cp ON gc.city_pool_id = cp.id
+     WHERE gc.game_id = ?`
+  ).bind(gameId).all<{
+    id: number; name: string; region: string; primary_alcohol: string
+    population_tier: string; is_coastal: number; demand_index: number; lat: number; lon: number
+  }>()
+
+  const cityNodes = gameCities.map(c => ({
+    id: c.id, name: c.name, region: c.region, primaryAlcohol: c.primary_alcohol,
+    demandIndex: c.demand_index, isCoastal: c.is_coastal === 1,
+    populationTier: c.population_tier as 'small' | 'medium' | 'large' | 'major',
+    lat: c.lat, lon: c.lon
+  }))
+
+  await c.env.PROHIBITIONDB.prepare(`DELETE FROM roads WHERE game_id = ?`).bind(gameId).run()
+
+  const roads = generateRoads(cityNodes)
+  for (const road of roads) {
+    await c.env.PROHIBITIONDB.prepare(
+      `INSERT INTO roads (game_id, from_city_id, to_city_id, distance_value) VALUES (?, ?, ?, ?)`
+    ).bind(gameId, road.fromCityId, road.toCityId, road.distanceValue).run()
+  }
+
+  return c.json({ success: true, roads: roads.length })
 })
 
 gamesRouter.post('/:id/turn', async (c) => {

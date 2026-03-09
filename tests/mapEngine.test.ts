@@ -2,11 +2,11 @@ import { describe, it, expect } from 'vitest'
 import { buildGraph, getShortestPath, isConnected, generateRoads, type CityNode } from '../src/game/mapEngine'
 
 const CITIES: CityNode[] = [
-  { id: 1, name: 'Chicago', region: 'Midwest', primaryAlcohol: 'beer', demandIndex: 1.0, isCoastal: false, populationTier: 'major' },
-  { id: 2, name: 'New York City', region: 'East Coast', primaryAlcohol: 'gin', demandIndex: 1.5, isCoastal: true, populationTier: 'major' },
-  { id: 3, name: 'Detroit', region: 'Midwest', primaryAlcohol: 'whiskey', demandIndex: 1.0, isCoastal: true, populationTier: 'large' },
-  { id: 4, name: 'New Orleans', region: 'South', primaryAlcohol: 'rum', demandIndex: 1.2, isCoastal: true, populationTier: 'large' },
-  { id: 5, name: 'San Francisco', region: 'West Coast', primaryAlcohol: 'whiskey', demandIndex: 1.3, isCoastal: true, populationTier: 'large' }
+  { id: 1, name: 'Chicago',       region: 'Midwest',     primaryAlcohol: 'beer',    demandIndex: 1.0, isCoastal: false, populationTier: 'major', lat: 41.85, lon: -87.65 },
+  { id: 2, name: 'New York City', region: 'East Coast',  primaryAlcohol: 'gin',     demandIndex: 1.5, isCoastal: true,  populationTier: 'major', lat: 40.71, lon: -74.01 },
+  { id: 3, name: 'Detroit',       region: 'Midwest',     primaryAlcohol: 'whiskey', demandIndex: 1.0, isCoastal: true,  populationTier: 'large', lat: 42.33, lon: -83.05 },
+  { id: 4, name: 'New Orleans',   region: 'South',       primaryAlcohol: 'rum',     demandIndex: 1.2, isCoastal: true,  populationTier: 'large', lat: 29.95, lon: -90.07 },
+  { id: 5, name: 'San Francisco', region: 'West Coast',  primaryAlcohol: 'whiskey', demandIndex: 1.3, isCoastal: true,  populationTier: 'large', lat: 37.77, lon: -122.42 }
 ]
 
 const ROADS = [
@@ -41,7 +41,7 @@ describe('isConnected()', () => {
   })
 
   it('returns false when a node is isolated', () => {
-    const isolated = [...CITIES, { id: 6, name: 'Isolated', region: 'West', primaryAlcohol: 'vodka', demandIndex: 1.0, isCoastal: false, populationTier: 'small' as const }]
+    const isolated = [...CITIES, { id: 6, name: 'Isolated', region: 'West', primaryAlcohol: 'vodka', demandIndex: 1.0, isCoastal: false, populationTier: 'small' as const, lat: 39.0, lon: -105.0 }]
     const graph = buildGraph(isolated, ROADS) // no road connects id=6
     expect(isConnected(graph)).toBe(false)
   })
@@ -76,11 +76,11 @@ describe('generateRoads()', () => {
     expect(isConnected(graph)).toBe(true)
   })
 
-  it('road costs are between 4 and 16', () => {
+  it('road costs are between 2 and 12', () => {
     const roads = generateRoads(CITIES)
     for (const road of roads) {
-      expect(road.distanceValue).toBeGreaterThanOrEqual(4)
-      expect(road.distanceValue).toBeLessThanOrEqual(16)
+      expect(road.distanceValue).toBeGreaterThanOrEqual(2)
+      expect(road.distanceValue).toBeLessThanOrEqual(12)
     }
   })
 
