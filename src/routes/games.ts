@@ -173,7 +173,8 @@ gamesRouter.get('/:id/map', async (c) => {
   const gameId = c.req.param('id')
   const { results: cities } = await c.env.PROHIBITIONDB.prepare(
     `SELECT gc.id, cp.name, cp.region, cp.primary_alcohol, gc.demand_index,
-            cp.is_coastal, cp.population_tier, gc.owner_player_id, gc.bribe_player_id, gc.bribe_expires_season
+            cp.is_coastal, cp.population_tier, gc.owner_player_id, gc.bribe_player_id, gc.bribe_expires_season,
+            cp.lat, cp.lon
      FROM game_cities gc
      JOIN city_pool cp ON gc.city_pool_id = cp.id
      WHERE gc.game_id = ?`

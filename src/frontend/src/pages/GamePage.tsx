@@ -42,7 +42,7 @@ interface FullState {
   players: PlayerInfo[]
 }
 
-interface MapCity { id: number; name: string; owner_player_id: number | null }
+interface MapCity { id: number; name: string; lat: number; lon: number; owner_player_id: number | null }
 interface MapRoad  { from_city_id: number; to_city_id: number }
 
 // ── Component ──────────────────────────────────────────────────────────────
@@ -115,6 +115,8 @@ export default function GamePage() {
   const svgCities: CityNode[] = mapCities.map(c => ({
     id:         c.id,
     name:       c.name,
+    lat:        c.lat,
+    lon:        c.lon,
     ownerColor: c.owner_player_id != null
       ? PLAYER_COLORS[(fullState?.players ?? []).findIndex(p => p.id === c.owner_player_id) % PLAYER_COLORS.length]
       : undefined

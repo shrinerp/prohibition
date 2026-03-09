@@ -3,7 +3,9 @@ import React, { useMemo } from 'react'
 export interface CityNode {
   id: number
   name: string
-  ownerColor?: string   // CSS colour, e.g. '#e07b39'
+  lat: number
+  lon: number
+  ownerColor?: string
 }
 
 export interface Road {
@@ -26,28 +28,31 @@ interface SvgMapProps {
   onCityClick?: (cityId: number) => void
 }
 
-/** Deterministic layout: evenly distribute cities in a grid-like spiral */
-function layoutCities(cities: CityNode[]): Map<number, { x: number; y: number }> {
-  const W = 780, H = 460
-  const cols = Math.ceil(Math.sqrt(cities.length * (W / H)))
-  const rows = Math.ceil(cities.length / cols)
-  const xStep = W / (cols + 1)
-  const yStep = H / (rows + 1)
+// Continental US bounds
+const LAT_MAX = 49.5
+const LAT_MIN = 24.5
+const LON_MIN = -125.0
+const LON_MAX = -66.5
 
-  const positions = new Map<number, { x: number; y: number }>()
-  cities.forEach((city, i) => {
-    const col = (i % cols) + 1
-    const row = Math.floor(i / cols) + 1
-    // Slight jitter so it doesn't look like a pure grid
-    const jx = ((city.id * 37) % 20) - 10
-    const jy = ((city.id * 53) % 20) - 10
-    positions.set(city.id, { x: col * xStep + jx, y: row * yStep + jy })
-  })
-  return positions
+// SVG viewport with padding
+const SVG_W = 800
+const SVG_H = 480
+const PAD = 30
+
+function project(lat: number, lon: number): { x: number; y: number } {
+  const x = PAD + ((lon - LON_MIN) / (LON_MAX - LON_MIN)) * (SVG_W - PAD * 2)
+  const y = PAD + ((LAT_MAX - lat) / (LAT_MAX - LAT_MIN)) * (SVG_H - PAD * 2)
+  return { x, y }
 }
 
 export default function SvgMap({ cities, roads, playerTokens, selectedCityId, onCityClick }: SvgMapProps) {
-  const positions = useMemo(() => layoutCities(cities), [cities])
+  const positions = useMemo(() => {
+    const map = new Map<number, { x: number; y: number }>()
+    for (const city of cities) {
+      map.set(city.id, project(city.lat, city.lon))
+    }
+    return map
+  }, [cities])
 
   if (cities.length === 0) {
     return (
@@ -59,7 +64,7 @@ export default function SvgMap({ cities, roads, playerTokens, selectedCityId, on
 
   return (
     <svg
-      viewBox="0 0 800 480"
+      viewBox={`0 0 ${SVG_W} ${SVG_H}`}
       className="w-full h-full"
       style={{ background: '#1c1917' }}
     >
@@ -96,10 +101,10 @@ export default function SvgMap({ cities, roads, playerTokens, selectedCityId, on
               strokeWidth={isSelected ? 3 : 1.5}
             />
             <text
-              x={pos.x} y={pos.y + 22}
+              x={pos.x} y={pos.y + 20}
               textAnchor="middle"
               fill="#d4a855"
-              fontSize="9"
+              fontSize="8"
               fontFamily="sans-serif"
             >
               {city.name.length > 12 ? city.name.slice(0, 11) + '…' : city.name}
@@ -108,7 +113,7 @@ export default function SvgMap({ cities, roads, playerTokens, selectedCityId, on
         )
       })}
 
-      {/* Player tokens — small circles offset from city centre */}
+      {/* Player tokens — small circles offset above city */}
       {playerTokens.map((token, i) => {
         const pos = positions.get(token.cityId)
         if (!pos) return null
