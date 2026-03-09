@@ -1,4 +1,13 @@
 import React, { useMemo } from 'react'
+import { geoAlbersUsa, geoPath } from 'd3-geo'
+import { feature, mesh } from 'topojson-client'
+import type { Topology, GeometryCollection } from 'topojson-specification'
+import usAtlasRaw from 'us-atlas/states-10m.json'
+
+const usAtlas = usAtlasRaw as unknown as Topology<{
+  states: GeometryCollection
+  nation: GeometryCollection
+}>
 
 export interface CityNode {
   id: number
@@ -28,39 +37,38 @@ interface SvgMapProps {
   onCityClick?: (cityId: number) => void
 }
 
-// Continental US bounds
-const LAT_MAX = 49.5
-const LAT_MIN = 24.5
-const LON_MIN = -125.0
-const LON_MAX = -66.5
-
-// SVG viewport with padding
 const SVG_W = 800
 const SVG_H = 480
-const PAD = 30
+const PAD  = 20
 
-function project(lat: number, lon: number): { x: number; y: number } {
-  const x = PAD + ((lon - LON_MIN) / (LON_MAX - LON_MIN)) * (SVG_W - PAD * 2)
-  const y = PAD + ((LAT_MAX - lat) / (LAT_MAX - LAT_MIN)) * (SVG_H - PAD * 2)
-  return { x, y }
+// Pre-compute once at module load — these never change
+const statesGeo  = feature(usAtlas, usAtlas.objects.states)
+const nationGeo  = feature(usAtlas, usAtlas.objects.nation)
+const stateMesh  = mesh(usAtlas, usAtlas.objects.states, (a, b) => a !== b)
+
+const projection = geoAlbersUsa().fitExtent(
+  [[PAD, PAD], [SVG_W - PAD, SVG_H - PAD]],
+  statesGeo
+)
+const pathGen    = geoPath().projection(projection)
+
+const NATION_D = pathGen(nationGeo) ?? ''
+const STATES_D = pathGen(stateMesh)  ?? ''
+
+function project(lat: number, lon: number): { x: number; y: number } | null {
+  const coords = projection([lon, lat])
+  return coords ? { x: coords[0], y: coords[1] } : null
 }
 
 export default function SvgMap({ cities, roads, playerTokens, selectedCityId, onCityClick }: SvgMapProps) {
   const positions = useMemo(() => {
     const map = new Map<number, { x: number; y: number }>()
     for (const city of cities) {
-      map.set(city.id, project(city.lat, city.lon))
+      const pos = project(city.lat, city.lon)
+      if (pos) map.set(city.id, pos)
     }
     return map
   }, [cities])
-
-  if (cities.length === 0) {
-    return (
-      <div className="flex items-center justify-center h-full text-stone-500 text-sm italic">
-        Map not yet generated — start the game to see the board.
-      </div>
-    )
-  }
 
   return (
     <svg
@@ -68,6 +76,15 @@ export default function SvgMap({ cities, roads, playerTokens, selectedCityId, on
       className="w-full h-full"
       style={{ background: '#1c1917' }}
     >
+      {/* Water / ocean fill behind land */}
+      <rect width={SVG_W} height={SVG_H} fill="#1c1917" />
+
+      {/* Land fill */}
+      <path d={NATION_D} fill="#292524" />
+
+      {/* State borders */}
+      <path d={STATES_D} fill="none" stroke="#44403c" strokeWidth="0.8" />
+
       {/* Roads */}
       {roads.map((road, i) => {
         const a = positions.get(road.fromCityId)
@@ -77,7 +94,7 @@ export default function SvgMap({ cities, roads, playerTokens, selectedCityId, on
           <line
             key={i}
             x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-            stroke="#57534e" strokeWidth="1.5" strokeOpacity="0.7"
+            stroke="#78716c" strokeWidth="1.2" strokeOpacity="0.6"
           />
         )
       })}
@@ -95,34 +112,34 @@ export default function SvgMap({ cities, roads, playerTokens, selectedCityId, on
             style={{ cursor: onCityClick ? 'pointer' : 'default' }}
           >
             <circle
-              cx={pos.x} cy={pos.y} r={isSelected ? 14 : 10}
+              cx={pos.x} cy={pos.y} r={isSelected ? 14 : 9}
               fill={fill}
               stroke={isSelected ? '#fbbf24' : '#d4a855'}
               strokeWidth={isSelected ? 3 : 1.5}
             />
             <text
-              x={pos.x} y={pos.y + 20}
+              x={pos.x} y={pos.y + 19}
               textAnchor="middle"
-              fill="#d4a855"
-              fontSize="8"
+              fill="#e7d5a8"
+              fontSize="7.5"
               fontFamily="sans-serif"
+              style={{ pointerEvents: 'none' }}
             >
-              {city.name.length > 12 ? city.name.slice(0, 11) + '…' : city.name}
+              {city.name.length > 13 ? city.name.slice(0, 12) + '…' : city.name}
             </text>
           </g>
         )
       })}
 
-      {/* Player tokens — small circles offset above city */}
+      {/* Player tokens — small circles offset above their city */}
       {playerTokens.map((token, i) => {
         const pos = positions.get(token.cityId)
         if (!pos) return null
         const offsetX = (i % 3 - 1) * 10
-        const offsetY = -14
         return (
           <circle
             key={token.playerId}
-            cx={pos.x + offsetX} cy={pos.y + offsetY} r={5}
+            cx={pos.x + offsetX} cy={pos.y - 14} r={5}
             fill={token.color}
             stroke={token.isMe ? '#fff' : '#555'}
             strokeWidth={token.isMe ? 2 : 1}
