@@ -43,7 +43,18 @@ interface FullState {
 }
 
 interface MapCity { id: number; name: string; lat: number; lon: number; owner_player_id: number | null }
-interface MapRoad  { from_city_id: number; to_city_id: number }
+interface MapRoad  { from_city_id: number; to_city_id: number; distance_value: number }
+
+// Mirror of the server-side calculateEffectiveMovement (characters.ts + movement.ts)
+function calcMovementPoints(roll: number, characterClass: string, vehicle: string): number {
+  let pts = roll
+  if (characterClass === 'bootlegger')   pts += 2
+  if (characterClass === 'hillbilly')    pts = Math.floor(pts * 0.9)
+  const vehicleMult: Record<string, number> = {
+    roadster: 1.2, truck: 0.8, workhorse: 1.0, whiskey_runner: 1.5
+  }
+  return Math.floor(pts * (vehicleMult[vehicle] ?? 1.0))
+}
 
 // ── Component ──────────────────────────────────────────────────────────────
 export default function GamePage() {
@@ -58,6 +69,7 @@ export default function GamePage() {
   const [error,        setError]        = useState('')
   const [moveMode,     setMoveMode]     = useState(false)
   const [movePath,     setMovePath]     = useState<number[]>([])
+  const [diceRoll,     setDiceRoll]     = useState<number | null>(null)
 
   const fetchAll = useCallback(async () => {
     if (!gameId) return
@@ -112,6 +124,32 @@ export default function GamePage() {
     .filter(i => i.quantity > 0)
     .map(i => ({ alcoholType: i.alcohol_type, units: i.quantity }))
 
+  // Road cost lookup for movement tracking
+  const roadCosts = React.useMemo(() => {
+    const m = new Map<string, number>()
+    for (const r of mapRoads) {
+      m.set(`${r.from_city_id}-${r.to_city_id}`, r.distance_value)
+      m.set(`${r.to_city_id}-${r.from_city_id}`, r.distance_value)
+    }
+    return m
+  }, [mapRoads])
+
+  const movementPoints = diceRoll != null
+    ? calcMovementPoints(diceRoll, player?.characterClass ?? '', player?.vehicle ?? '')
+    : null
+
+  const movementUsed = React.useMemo(() => {
+    if (!player?.currentCityId) return 0
+    let used = 0, current = player.currentCityId
+    for (const cityId of movePath) {
+      used += roadCosts.get(`${current}-${cityId}`) ?? 0
+      current = cityId
+    }
+    return used
+  }, [movePath, roadCosts, player?.currentCityId])
+
+  const movementRemaining = movementPoints != null ? movementPoints - movementUsed : null
+
   const svgCities: CityNode[] = mapCities.map(c => ({
     id:         c.id,
     name:       c.name,
@@ -142,20 +180,41 @@ export default function GamePage() {
     fetchAll()
   }
 
+  function rollToMove() {
+    const roll = Math.ceil(Math.random() * 6) + Math.ceil(Math.random() * 6)
+    setDiceRoll(roll)
+    setMoveMode(true)
+    setMovePath([])
+  }
+
+  function cancelMove() {
+    setMoveMode(false)
+    setMovePath([])
+    setDiceRoll(null)
+  }
+
   async function submitTurn(actions: unknown[]) {
     await fetch(`/api/games/${gameId}/turn`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify(actions)
     })
-    setMoveMode(false)
-    setMovePath([])
+    cancelMove()
     fetchAll()
   }
 
   function handleCityClick(cityId: number) {
-    if (!moveMode) return
-    setMovePath(prev => prev.includes(cityId) ? prev.filter(id => id !== cityId) : [...prev, cityId])
+    if (!moveMode || cityId === player?.currentCityId) return
+    setMovePath(prev => {
+      // Toggle: clicking the last city in path removes it
+      if (prev.length > 0 && prev[prev.length - 1] === cityId) return prev.slice(0, -1)
+      // Check we haven't already exceeded movement
+      const current = prev.length > 0 ? prev[prev.length - 1] : player?.currentCityId
+      if (!current) return prev
+      const stepCost = roadCosts.get(`${current}-${cityId}`) ?? 0
+      if (movementRemaining != null && stepCost > movementRemaining) return prev
+      return [...prev, cityId]
+    })
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -304,9 +363,15 @@ export default function GamePage() {
           {isInJail && (
             <JailOverlay seasonsRemaining={jailSeasonsLeft} hasLawyerPerk={false} onPayLawyer={() => {}} />
           )}
-          {moveMode && (
-            <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 bg-amber-800 border border-amber-500 rounded px-4 py-2 text-sm text-amber-200">
-              Click cities to build your path ({movePath.length} hop{movePath.length !== 1 ? 's' : ''}) → hit <strong>Confirm Move</strong>
+          {moveMode && diceRoll != null && (
+            <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 bg-stone-800 border border-amber-500 rounded px-4 py-2 text-sm text-amber-200 flex items-center gap-3">
+              <span className="text-xl font-bold">🎲 {diceRoll}</span>
+              <span className="text-stone-400">→</span>
+              <span><strong className="text-amber-300">{movementPoints} pts</strong></span>
+              {movementRemaining != null && movePath.length > 0 && (
+                <span className="text-stone-400">· <strong className={movementRemaining < 0 ? 'text-red-400' : 'text-green-400'}>{movementRemaining} remaining</strong></span>
+              )}
+              <span className="text-stone-500 text-xs">Click cities to build path</span>
             </div>
           )}
           <div className="p-2 h-full">
@@ -329,30 +394,39 @@ export default function GamePage() {
             <>
               {moveMode ? (
                 <div className="space-y-1">
+                  {diceRoll != null && (
+                    <div className="bg-stone-800 border border-stone-600 rounded p-2 text-center">
+                      <p className="text-stone-400 text-xs uppercase tracking-wider">Roll</p>
+                      <p className="text-2xl font-bold text-amber-300">🎲 {diceRoll}</p>
+                      <p className="text-xs text-stone-400">{movementPoints} movement pts</p>
+                      {movementRemaining != null && (
+                        <p className={`text-xs font-bold ${movementRemaining < 0 ? 'text-red-400' : 'text-green-400'}`}>
+                          {movementRemaining} remaining
+                        </p>
+                      )}
+                    </div>
+                  )}
                   <button
                     disabled={movePath.length === 0}
-                    onClick={() => submitTurn([{ type: 'move', targetPath: movePath }])}
+                    onClick={() => submitTurn([{ type: 'move', targetPath: movePath, roll: diceRoll }])}
                     className="w-full py-2 bg-green-700 hover:bg-green-600 disabled:opacity-40 text-white font-bold rounded uppercase tracking-wide text-sm transition"
                   >
                     Confirm Move
                   </button>
                   <button
-                    onClick={() => { setMoveMode(false); setMovePath([]) }}
+                    onClick={cancelMove}
                     className="w-full py-1 text-stone-400 hover:text-stone-200 text-xs uppercase tracking-wide transition"
                   >
                     Cancel
                   </button>
-                  {movePath.length > 0 && (
-                    <p className="text-xs text-stone-500 break-all">Path: {movePath.join(' → ')}</p>
-                  )}
                 </div>
               ) : (
                 <>
                   <button
-                    onClick={() => setMoveMode(true)}
+                    onClick={rollToMove}
                     className="w-full py-2 bg-amber-600 hover:bg-amber-500 text-stone-900 font-bold rounded uppercase tracking-wide text-sm transition"
                   >
-                    Move
+                    🎲 Roll to Move
                   </button>
                   <button className="w-full py-2 border border-amber-600 hover:bg-amber-900 text-amber-400 font-bold rounded uppercase tracking-wide text-sm transition">
                     Buy / Sell

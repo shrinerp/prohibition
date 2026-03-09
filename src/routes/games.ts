@@ -3,6 +3,7 @@ import type { Env } from '../index'
 import type { AuthVariables } from '../middleware/sessionAuth'
 import { sessionAuth } from '../middleware/sessionAuth'
 import { GameService } from '../services/GameService'
+import { calculateEffectiveMovement, resolveMovement, type RoadSegment } from '../game/movement'
 
 export const gamesRouter = new Hono<{ Bindings: Env; Variables: AuthVariables }>()
 
@@ -45,13 +46,15 @@ gamesRouter.post('/:id/turn', async (c) => {
 
   // Verify it's this player's turn
   const playerRow = await c.env.PROHIBITIONDB.prepare(
-    `SELECT gp.id, gp.turn_order, g.current_player_index, g.current_season, g.status, g.player_count
+    `SELECT gp.id, gp.turn_order, gp.current_city_id, gp.character_class, gp.vehicle,
+            g.current_player_index, g.current_season, g.status, g.player_count
      FROM game_players gp
      JOIN games g ON g.id = gp.game_id
      WHERE gp.game_id = ? AND gp.user_id = ?`
   ).bind(gameId, userId).first<{
-    id: number; turn_order: number; current_player_index: number;
-    current_season: number; status: string; player_count: number
+    id: number; turn_order: number; current_city_id: number | null
+    character_class: string; vehicle: string
+    current_player_index: number; current_season: number; status: string; player_count: number
   }>()
 
   if (!playerRow) return c.json({ success: false, message: 'Not in game' }, 403)
@@ -67,12 +70,30 @@ gamesRouter.post('/:id/turn', async (c) => {
   ).bind(gameId, playerRow.id, playerRow.current_season, JSON.stringify(actions)).run()
 
   // Resolve actions
-  for (const action of actions as Array<{ type: string; targetPath?: number[] }>) {
-    if (action.type === 'move' && action.targetPath && action.targetPath.length > 0) {
-      const dest = action.targetPath[action.targetPath.length - 1]
+  for (const action of actions as Array<{ type: string; targetPath?: number[]; roll?: number }>) {
+    if (action.type === 'move' && action.targetPath && action.targetPath.length > 0 && playerRow.current_city_id != null) {
+      // Validate movement using the declared roll and character/vehicle modifiers
+      const roll = (typeof action.roll === 'number' && action.roll >= 2 && action.roll <= 12)
+        ? action.roll
+        : 7 // fallback to average if missing
+
+      const movementPoints = calculateEffectiveMovement(roll, playerRow.character_class, playerRow.vehicle)
+
+      const { results: roadRows } = await c.env.PROHIBITIONDB.prepare(
+        `SELECT from_city_id, to_city_id, distance_value FROM roads WHERE game_id = ?`
+      ).bind(gameId).all<{ from_city_id: number; to_city_id: number; distance_value: number }>()
+
+      const roads: RoadSegment[] = roadRows.map(r => ({
+        fromCityId:    r.from_city_id,
+        toCityId:      r.to_city_id,
+        distanceValue: r.distance_value
+      }))
+
+      const result = resolveMovement(playerRow.current_city_id, action.targetPath, roads, movementPoints)
+
       await c.env.PROHIBITIONDB.prepare(
         `UPDATE game_players SET current_city_id = ? WHERE id = ?`
-      ).bind(dest, playerRow.id).run()
+      ).bind(result.currentCityId, playerRow.id).run()
     }
   }
 
