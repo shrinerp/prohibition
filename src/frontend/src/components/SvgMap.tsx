@@ -35,6 +35,7 @@ interface SvgMapProps {
   playerTokens: PlayerToken[]
   currentCityId?: number | null
   selectedCityId?: number | null
+  reachableCityIds?: Set<number> | null
   onCityClick?: (cityId: number) => void
 }
 
@@ -61,7 +62,7 @@ function project(lat: number, lon: number): { x: number; y: number } | null {
   return coords ? { x: coords[0], y: coords[1] } : null
 }
 
-export default function SvgMap({ cities, roads, playerTokens, currentCityId, selectedCityId, onCityClick }: SvgMapProps) {
+export default function SvgMap({ cities, roads, playerTokens, currentCityId, selectedCityId, reachableCityIds, onCityClick }: SvgMapProps) {
   const positions = useMemo(() => {
     const map = new Map<number, { x: number; y: number }>()
     for (const city of cities) {
@@ -106,31 +107,40 @@ export default function SvgMap({ cities, roads, playerTokens, currentCityId, sel
         if (!pos) return null
         const isSelected  = selectedCityId === city.id
         const isCurrent   = currentCityId  === city.id
+        const isReachable = reachableCityIds?.has(city.id) ?? false
+        const inMoveMode  = reachableCityIds !== null && reachableCityIds !== undefined
+        const isUnreachable = inMoveMode && !isReachable && !isCurrent && !isSelected
+
         const fill = city.ownerColor ?? '#78716c'
-        const r = isSelected ? 14 : 9
+        const r = isSelected ? 13 : 9
         return (
           <g
             key={city.id}
             onClick={() => onCityClick?.(city.id)}
-            style={{ cursor: onCityClick ? 'pointer' : 'default' }}
+            style={{ cursor: isReachable && onCityClick ? 'pointer' : 'default' }}
+            opacity={isUnreachable ? 0.3 : 1}
           >
-            {/* "You are here" pulse ring */}
+            {/* Reachable glow ring */}
+            {isReachable && (
+              <circle cx={pos.x} cy={pos.y} r={r + 6} fill="none" stroke="#4ade80" strokeWidth="1.5" strokeOpacity="0.7" />
+            )}
+            {/* "You are here" ring */}
             {isCurrent && (
               <circle cx={pos.x} cy={pos.y} r={r + 7} fill="none" stroke="#ffffff" strokeWidth="2" strokeOpacity="0.5" />
             )}
             <circle
               cx={pos.x} cy={pos.y} r={r}
               fill={fill}
-              stroke={isSelected ? '#fbbf24' : isCurrent ? '#ffffff' : '#d4a855'}
-              strokeWidth={isSelected || isCurrent ? 2.5 : 1.5}
+              stroke={isSelected ? '#fbbf24' : isCurrent ? '#ffffff' : isReachable ? '#4ade80' : '#d4a855'}
+              strokeWidth={isSelected || isCurrent ? 2.5 : isReachable ? 2 : 1.5}
             />
             <text
               x={pos.x} y={pos.y + 19}
               textAnchor="middle"
-              fill={isCurrent ? '#ffffff' : '#e7d5a8'}
+              fill={isCurrent ? '#ffffff' : isReachable ? '#86efac' : '#e7d5a8'}
               fontSize="7.5"
               fontFamily="sans-serif"
-              fontWeight={isCurrent ? 'bold' : 'normal'}
+              fontWeight={isCurrent || isReachable ? 'bold' : 'normal'}
               style={{ pointerEvents: 'none' }}
             >
               {city.name.length > 13 ? city.name.slice(0, 12) + '…' : city.name}

@@ -124,14 +124,19 @@ export default function GamePage() {
     .filter(i => i.quantity > 0)
     .map(i => ({ alcoholType: i.alcohol_type, units: i.quantity }))
 
-  // Road cost lookup for movement tracking
-  const roadCosts = React.useMemo(() => {
-    const m = new Map<string, number>()
+  // Road cost lookup + adjacency list for movement tracking and reachability
+  const { roadCosts, adjacency } = React.useMemo(() => {
+    const roadCosts = new Map<string, number>()
+    const adjacency = new Map<number, Array<{ cityId: number; cost: number }>>()
     for (const r of mapRoads) {
-      m.set(`${r.from_city_id}-${r.to_city_id}`, r.distance_value)
-      m.set(`${r.to_city_id}-${r.from_city_id}`, r.distance_value)
+      roadCosts.set(`${r.from_city_id}-${r.to_city_id}`, r.distance_value)
+      roadCosts.set(`${r.to_city_id}-${r.from_city_id}`, r.distance_value)
+      if (!adjacency.has(r.from_city_id)) adjacency.set(r.from_city_id, [])
+      if (!adjacency.has(r.to_city_id))   adjacency.set(r.to_city_id, [])
+      adjacency.get(r.from_city_id)!.push({ cityId: r.to_city_id,   cost: r.distance_value })
+      adjacency.get(r.to_city_id)!.push(  { cityId: r.from_city_id, cost: r.distance_value })
     }
-    return m
+    return { roadCosts, adjacency }
   }, [mapRoads])
 
   const movementPoints = diceRoll != null
@@ -149,6 +154,30 @@ export default function GamePage() {
   }, [movePath, roadCosts, player?.currentCityId])
 
   const movementRemaining = movementPoints != null ? movementPoints - movementUsed : null
+
+  // Dijkstra — cities reachable from current path-end with remaining points
+  const reachableCityIds = React.useMemo<Set<number> | null>(() => {
+    if (!moveMode || movementRemaining == null || movementRemaining <= 0) return null
+    const fromId = movePath.length > 0 ? movePath[movePath.length - 1] : player?.currentCityId
+    if (!fromId) return null
+    const dist = new Map<number, number>([[fromId, 0]])
+    const queue: [number, number][] = [[0, fromId]]
+    while (queue.length > 0) {
+      queue.sort((a, b) => a[0] - b[0])
+      const [cost, cityId] = queue.shift()!
+      if (cost > (dist.get(cityId) ?? Infinity)) continue
+      for (const { cityId: nId, cost: eCost } of adjacency.get(cityId) ?? []) {
+        const nc = cost + eCost
+        if (nc <= movementRemaining && nc < (dist.get(nId) ?? Infinity)) {
+          dist.set(nId, nc)
+          queue.push([nc, nId])
+        }
+      }
+    }
+    const result = new Set<number>()
+    for (const [cId] of dist) if (cId !== fromId) result.add(cId)
+    return result
+  }, [moveMode, movementRemaining, movePath, player?.currentCityId, adjacency])
 
   const svgCities: CityNode[] = mapCities.map(c => ({
     id:         c.id,
@@ -381,6 +410,7 @@ export default function GamePage() {
               playerTokens={svgTokens}
               currentCityId={player?.currentCityId ?? null}
               selectedCityId={moveMode && movePath.length > 0 ? movePath[movePath.length - 1] : null}
+              reachableCityIds={reachableCityIds}
               onCityClick={moveMode ? handleCityClick : undefined}
             />
           </div>

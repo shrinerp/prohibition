@@ -129,7 +129,7 @@ export function generateRoads(cities: CityNode[]): Road[] {
       roads.push({
         fromCityId: group[i].id,
         toCityId: group[i + 1].id,
-        distanceValue: randomCost(4, 8) // short regional hops
+        distanceValue: randomCost(2, 5) // short regional hops
       })
     }
   }
@@ -144,7 +144,7 @@ export function generateRoads(cities: CityNode[]): Road[] {
     roads.push({
       fromCityId: a.id,
       toCityId: b.id,
-      distanceValue: randomCost(8, 16) // longer cross-region routes
+      distanceValue: randomCost(8, 12) // longer cross-region routes
     })
   }
 
