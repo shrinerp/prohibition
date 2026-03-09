@@ -172,32 +172,94 @@ export default function GamePage() {
 
   // ── Lobby screen ───────────────────────────────────────────────────────────
   if (game?.status === 'lobby') {
+    const CHARACTERS = [
+      { id: 'priest_nun',   name: 'The Priest / Nun',           perk: '-25% Heat generation',          drawback: '-20% Cargo capacity' },
+      { id: 'hillbilly',    name: 'The Hillbilly',               perk: '-20% Distillery upgrade costs', drawback: '-10% Movement roll' },
+      { id: 'gangster',     name: 'The Gangster',                perk: '+15% Double Cross success',     drawback: '+20% Heat in owned cities' },
+      { id: 'vixen',        name: 'The Vixen',                   perk: 'Bribes last 6 seasons',         drawback: '-10% Production volume' },
+      { id: 'pharmacist',   name: 'The Pharmacist',              perk: 'Medicinal Spirits at 1.5×',     drawback: 'Takeover costs +25%' },
+      { id: 'jazz_singer',  name: 'The Jazz Singer',             perk: 'Passive income in big cities',  drawback: 'Higher robbery losses' },
+      { id: 'bootlegger',   name: 'The Bootlegger (Clyde)',      perk: 'All dice rolls +2 bonus',       drawback: 'None' },
+      { id: 'socialite',    name: 'The Socialite (Eleanor)',     perk: '+15% sell price everywhere',    drawback: 'None' },
+      { id: 'union_leader', name: 'The Union Leader (Big Mike)', perk: '+20% Double Cross in big cities', drawback: 'None' },
+      { id: 'rum_runner',   name: 'The Rum-Runner (Capt. Morgan)', perk: 'Coastal cities produce 2×',  drawback: 'None' },
+    ]
+    const myClass = player?.characterClass ?? 'unselected'
+    const takenClasses = new Set((fullState?.players ?? []).filter(p => p.id !== player?.id).map(p => p.characterClass))
+
+    async function selectCharacter(id: string) {
+      await fetch(`/api/games/${gameId}/character`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ characterClass: id })
+      })
+      fetchAll()
+    }
+
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen gap-6 p-8">
-        <h2 className="text-3xl font-bold text-amber-400">Waiting for Players</h2>
-        <div className="bg-stone-800 border border-stone-600 rounded p-4 text-center">
-          <p className="text-stone-400 text-xs uppercase tracking-wider mb-1">Invite Code</p>
-          <p className="text-2xl font-mono font-bold text-amber-300">{game.inviteCode}</p>
-        </div>
-        <div className="bg-stone-800 border border-stone-600 rounded p-4 min-w-64">
-          <p className="text-stone-400 text-xs uppercase tracking-wider mb-2">Players Joined</p>
-          {(fullState?.players ?? []).map((p, i) => (
-            <div key={p.id} className="flex items-center gap-2 py-1 text-sm">
-              <div className="w-2 h-2 rounded-full" style={{ background: PLAYER_COLORS[i % PLAYER_COLORS.length] }} />
-              <span className={p.id === player?.id ? 'text-amber-400' : 'text-stone-300'}>{p.name}</span>
+      <div className="min-h-screen bg-stone-900 p-6 flex flex-col items-center gap-6">
+        <h2 className="text-3xl font-bold text-amber-400">Speakeasy Lobby</h2>
+
+        <div className="flex gap-6 flex-wrap justify-center">
+          {/* Invite code + player list */}
+          <div className="flex flex-col gap-4 min-w-48">
+            <div className="bg-stone-800 border border-stone-600 rounded p-4 text-center">
+              <p className="text-stone-400 text-xs uppercase tracking-wider mb-1">Invite Code</p>
+              <p className="text-2xl font-mono font-bold text-amber-300">{game.inviteCode}</p>
             </div>
-          ))}
+            <div className="bg-stone-800 border border-stone-600 rounded p-4">
+              <p className="text-stone-400 text-xs uppercase tracking-wider mb-2">Players</p>
+              {(fullState?.players ?? []).map((p, i) => (
+                <div key={p.id} className="flex items-center gap-2 py-1 text-sm">
+                  <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: PLAYER_COLORS[i % PLAYER_COLORS.length] }} />
+                  <span className={p.id === player?.id ? 'text-amber-400' : 'text-stone-300'}>{p.name}</span>
+                  {p.characterClass && p.characterClass !== 'unselected' && (
+                    <span className="text-stone-500 text-xs truncate">— {p.characterClass.replace(/_/g, ' ')}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+            {game.isHost ? (
+              <button
+                onClick={startGame}
+                className="px-6 py-3 bg-amber-600 hover:bg-amber-500 text-stone-900 font-bold rounded uppercase tracking-wide transition"
+              >
+                Start Game
+              </button>
+            ) : (
+              <p className="text-stone-500 italic text-sm text-center">Waiting for host to start…</p>
+            )}
+          </div>
+
+          {/* Character grid */}
+          <div>
+            <p className="text-stone-400 text-xs uppercase tracking-wider mb-3">Choose Your Character</p>
+            <div className="grid grid-cols-2 gap-2 max-w-xl">
+              {CHARACTERS.map(c => {
+                const isMine  = myClass === c.id
+                const isTaken = takenClasses.has(c.id)
+                return (
+                  <button
+                    key={c.id}
+                    disabled={isTaken && !isMine}
+                    onClick={() => selectCharacter(c.id)}
+                    className={[
+                      'text-left rounded border p-3 transition',
+                      isMine  ? 'border-amber-400 bg-amber-900/40'
+                              : isTaken ? 'border-stone-700 bg-stone-800/50 opacity-40 cursor-not-allowed'
+                                        : 'border-stone-600 bg-stone-800 hover:border-amber-600 hover:bg-stone-700'
+                    ].join(' ')}
+                  >
+                    <p className="font-bold text-sm text-amber-300">{c.name}</p>
+                    <p className="text-xs text-green-400 mt-0.5">✦ {c.perk}</p>
+                    {c.drawback !== 'None' && <p className="text-xs text-red-400">✦ {c.drawback}</p>}
+                    {isTaken && !isMine && <p className="text-xs text-stone-500 mt-0.5">Taken</p>}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
         </div>
-        {game.isHost ? (
-          <button
-            onClick={startGame}
-            className="px-8 py-3 bg-amber-600 hover:bg-amber-500 text-stone-900 font-bold rounded uppercase tracking-wide transition"
-          >
-            Start Game
-          </button>
-        ) : (
-          <p className="text-stone-500 italic">Waiting for host to start…</p>
-        )}
       </div>
     )
   }
