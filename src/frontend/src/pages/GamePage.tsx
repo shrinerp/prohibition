@@ -314,6 +314,7 @@ export default function GamePage() {
               cities={svgCities}
               roads={svgRoads}
               playerTokens={svgTokens}
+              currentCityId={player?.currentCityId ?? null}
               selectedCityId={moveMode && movePath.length > 0 ? movePath[movePath.length - 1] : null}
               onCityClick={moveMode ? handleCityClick : undefined}
             />

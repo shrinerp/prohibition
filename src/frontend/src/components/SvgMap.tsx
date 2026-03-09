@@ -33,6 +33,7 @@ interface SvgMapProps {
   cities: CityNode[]
   roads: Road[]
   playerTokens: PlayerToken[]
+  currentCityId?: number | null
   selectedCityId?: number | null
   onCityClick?: (cityId: number) => void
 }
@@ -60,7 +61,7 @@ function project(lat: number, lon: number): { x: number; y: number } | null {
   return coords ? { x: coords[0], y: coords[1] } : null
 }
 
-export default function SvgMap({ cities, roads, playerTokens, selectedCityId, onCityClick }: SvgMapProps) {
+export default function SvgMap({ cities, roads, playerTokens, currentCityId, selectedCityId, onCityClick }: SvgMapProps) {
   const positions = useMemo(() => {
     const map = new Map<number, { x: number; y: number }>()
     for (const city of cities) {
@@ -103,26 +104,33 @@ export default function SvgMap({ cities, roads, playerTokens, selectedCityId, on
       {cities.map(city => {
         const pos = positions.get(city.id)
         if (!pos) return null
-        const isSelected = selectedCityId === city.id
+        const isSelected  = selectedCityId === city.id
+        const isCurrent   = currentCityId  === city.id
         const fill = city.ownerColor ?? '#78716c'
+        const r = isSelected ? 14 : 9
         return (
           <g
             key={city.id}
             onClick={() => onCityClick?.(city.id)}
             style={{ cursor: onCityClick ? 'pointer' : 'default' }}
           >
+            {/* "You are here" pulse ring */}
+            {isCurrent && (
+              <circle cx={pos.x} cy={pos.y} r={r + 7} fill="none" stroke="#ffffff" strokeWidth="2" strokeOpacity="0.5" />
+            )}
             <circle
-              cx={pos.x} cy={pos.y} r={isSelected ? 14 : 9}
+              cx={pos.x} cy={pos.y} r={r}
               fill={fill}
-              stroke={isSelected ? '#fbbf24' : '#d4a855'}
-              strokeWidth={isSelected ? 3 : 1.5}
+              stroke={isSelected ? '#fbbf24' : isCurrent ? '#ffffff' : '#d4a855'}
+              strokeWidth={isSelected || isCurrent ? 2.5 : 1.5}
             />
             <text
               x={pos.x} y={pos.y + 19}
               textAnchor="middle"
-              fill="#e7d5a8"
+              fill={isCurrent ? '#ffffff' : '#e7d5a8'}
               fontSize="7.5"
               fontFamily="sans-serif"
+              fontWeight={isCurrent ? 'bold' : 'normal'}
               style={{ pointerEvents: 'none' }}
             >
               {city.name.length > 13 ? city.name.slice(0, 12) + '…' : city.name}
