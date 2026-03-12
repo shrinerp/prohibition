@@ -1043,3 +1043,58 @@ gamesRouter.get('/:id/map', async (c) => {
 
   return c.json({ success: true, data: { cities, roads, cityInventory } })
 })
+
+// GET /:id/messages — poll for new chat messages since a given id
+gamesRouter.get('/:id/messages', async (c) => {
+  const gameId = c.req.param('id')
+  const userId = c.get('userId')
+  const since = parseInt(c.req.query('since') ?? '0', 10) || 0
+
+  const player = await c.env.PROHIBITIONDB.prepare(
+    `SELECT id FROM game_players WHERE game_id = ? AND user_id = ?`
+  ).bind(gameId, userId).first<{ id: number }>()
+  if (!player) return c.json({ success: false, message: 'Not in game' }, 403)
+
+  const { results } = await c.env.PROHIBITIONDB.prepare(
+    `SELECT gm.id, gm.message, gm.created_at, gp.display_name, gp.turn_order
+     FROM game_messages gm
+     JOIN game_players gp ON gp.id = gm.player_id
+     WHERE gm.game_id = ? AND gm.id > ?
+     ORDER BY gm.id ASC LIMIT 50`
+  ).bind(gameId, since).all<{
+    id: number; message: string; created_at: string; display_name: string | null; turn_order: number
+  }>()
+
+  const messages = results.map(r => ({
+    id: r.id,
+    message: r.message,
+    createdAt: r.created_at,
+    playerName: r.display_name ?? 'Player',
+    turnOrder: r.turn_order,
+  }))
+
+  return c.json({ success: true, data: { messages } })
+})
+
+// POST /:id/messages — send a chat message
+gamesRouter.post('/:id/messages', async (c) => {
+  const gameId = c.req.param('id')
+  const userId = c.get('userId')
+  const { message } = await c.req.json<{ message: string }>()
+
+  const trimmed = (message ?? '').trim()
+  if (!trimmed || trimmed.length > 500) {
+    return c.json({ success: false, message: 'Message must be 1–500 characters' }, 400)
+  }
+
+  const player = await c.env.PROHIBITIONDB.prepare(
+    `SELECT id FROM game_players WHERE game_id = ? AND user_id = ?`
+  ).bind(gameId, userId).first<{ id: number }>()
+  if (!player) return c.json({ success: false, message: 'Not in game' }, 403)
+
+  await c.env.PROHIBITIONDB.prepare(
+    `INSERT INTO game_messages (game_id, player_id, message) VALUES (?, ?, ?)`
+  ).bind(gameId, player.id, trimmed).run()
+
+  return c.json({ success: true })
+})

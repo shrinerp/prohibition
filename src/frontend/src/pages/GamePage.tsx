@@ -13,6 +13,7 @@ import JailOverlay      from '../components/JailOverlay'
 import CityDetailDialog     from '../components/CityDetailDialog'
 import CelebrationDialog, { type Celebration } from '../components/CelebrationDialog'
 import NetWorthDialog from '../components/NetWorthDialog'
+import ChatPanel from '../components/ChatPanel'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const GAME_START_YEAR   = 1921
@@ -1349,6 +1350,18 @@ export default function GamePage() {
                 </div>
               ))}
             </div>
+          )}
+
+          {/* Chat */}
+          {fullState && player && (
+            <ChatPanel
+              gameId={gameId!}
+              myTurnOrder={player.turnOrder}
+              players={fullState.players
+                .sort((a, b) => a.turnOrder - b.turnOrder)
+                .map(p => ({ turnOrder: p.turnOrder, name: p.id === player.id ? 'You' : p.name, isYou: p.id === player.id }))}
+              playerColors={PLAYER_COLORS}
+            />
           )}
         </div>}
         </div>
