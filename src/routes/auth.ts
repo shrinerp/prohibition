@@ -11,7 +11,7 @@ authRouter.post('/register', ageGateMiddleware, async (c) => {
   const svc = new AuthService(c.env)
   const result = await svc.register(body.email, body.password, body.date_of_birth)
   if (!result.success) return c.json({ success: false, message: result.message }, 400)
-  setCookie(c, 'session', result.sessionToken!, { httpOnly: true, path: '/', sameSite: 'Lax' })
+  setCookie(c, 'session', result.sessionToken!, { httpOnly: true, path: '/', sameSite: 'Lax', secure: true, maxAge: 30 * 24 * 60 * 60 })
   return c.json({ success: true })
 })
 
@@ -20,7 +20,7 @@ authRouter.post('/login', async (c) => {
   const svc = new AuthService(c.env)
   const result = await svc.login(body.email, body.password)
   if (!result.success) return c.json({ success: false, message: result.message }, 401)
-  setCookie(c, 'session', result.sessionToken!, { httpOnly: true, path: '/', sameSite: 'Lax' })
+  setCookie(c, 'session', result.sessionToken!, { httpOnly: true, path: '/', sameSite: 'Lax', secure: true, maxAge: 30 * 24 * 60 * 60 })
   return c.json({ success: true })
 })
 

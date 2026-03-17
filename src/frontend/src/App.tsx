@@ -6,6 +6,7 @@ import RegisterPage from './pages/RegisterPage'
 import GamesPage   from './pages/GamesPage'
 import GamePage    from './pages/GamePage'
 import EndGamePage from './pages/EndGamePage'
+import AdminPage   from './pages/AdminPage'
 
 export default function App() {
   return (
@@ -18,6 +19,7 @@ export default function App() {
           <Route path="/games"       element={<GamesPage />} />
           <Route path="/games/:id"   element={<GamePage />} />
           <Route path="/games/:id/end" element={<EndGamePage />} />
+          <Route path="/admin"       element={<AdminPage />} />
           <Route path="*"            element={<Navigate to="/" replace />} />
         </Routes>
       </div>

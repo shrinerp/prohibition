@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import SvgMap, { type CityNode, type Road, type PlayerToken } from '../components/SvgMap'
 import HeatMeter      from '../components/HeatMeter'
@@ -14,8 +14,20 @@ import CityDetailDialog     from '../components/CityDetailDialog'
 import CelebrationDialog, { type Celebration } from '../components/CelebrationDialog'
 import NetWorthDialog from '../components/NetWorthDialog'
 import ChatPanel from '../components/ChatPanel'
+import CityMapDialog from '../components/CityMapDialog'
+import DrinkDialog from '../components/DrinkDialog'
+import TrapDialog from '../components/TrapDialog'
+import AlliancePanel from '../components/AlliancePanel'
+import TutorialOverlay from '../components/TutorialOverlay'
+import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+const ALCOHOL_EMOJI: Record<string, string> = {
+  beer: '🍺', wine: '🍷', whiskey: '🥃', bourbon: '🥃', scotch: '🥃', rye: '🥃',
+  gin: '🍸', rum: '🍹', vodka: '🍸', moonshine: '🫙', tequila: '🥂',
+  brandy: '🍷', vermouth: '🍸', malort: '😬',
+}
+
 const GAME_START_YEAR   = 1921
 const SEASONS_PER_YEAR  = 4
 const SEASON_NAMES      = ['Spring', 'Summer', 'Autumn', 'Winter'] as const
@@ -43,19 +55,30 @@ interface FullState {
   game: {
     status: string; currentSeason: number
     currentPlayerIndex: number; turnDeadline: string | null
-    inviteCode: string; gameName: string | null; isHost: boolean
+    inviteCode: string; gameName: string | null; isHost: boolean; maxPlayers: number
   }
   player: {
     id: number; turnOrder: number; characterClass: string
     cash: number; heat: number; jailUntilSeason: number | null
     currentCityId: number | null; homeCityId: number | null
     adjustmentCards: number
+    stuckUntilSeason: number | null
+    tutorialSeen: boolean
+    currentCityCompetitorStill: { tier: number; ownerPlayerId: number } | null
+    currentCityHasTrap: boolean
+    myTraps: Array<{ cityId: number; consequenceType: string; cityName: string }>
+    pendingDrinks: Array<{ senderName: string; alcoholType: string }>
+    pendingTrap: { setterName: string; consequenceType: string; cityName: string; params: Record<string, number> } | null
     vehicles: VehicleState[]
     distilleryCityIds: number[]
     bribedCityIds: number[]
     distilleries: Array<{ id: number; cityId: number; tier: number; primaryAlcohol: string; cityName: string }>
   }
   players: PlayerInfo[]
+  alliances: Array<{
+    id: number; status: 'pending' | 'active'; formedSeason: number | null
+    partnerPlayerId: number; partnerName: string; iRequested: boolean
+  }>
 }
 
 interface MapCity {
@@ -261,6 +284,7 @@ export default function GamePage() {
   const [cityDetailOpen, setCityDetailOpen] = useState(false)
   const [stillOpen,    setStillOpen]    = useState(false)
   const [bribeOpen,    setBribeOpen]    = useState(false)
+  const [trapOpen,     setTrapOpen]     = useState(false)
   const [viewCityId,   setViewCityId]   = useState<number | null>(null)
   const [policeEncounter, setPoliceEncounter] = useState<{ bribeCost: number; populationTier: string; heat: number } | null>(null)
   const [leftOpen,  setLeftOpen]  = useState(true)
@@ -273,6 +297,10 @@ export default function GamePage() {
   const [distilleriesOpen, setDistilleriesOpen] = useState(false)
   const [vehiclesOpen, setVehiclesOpen] = useState(false)
   const [netWorthOpen, setNetWorthOpen] = useState(false)
+  const [turnPending, setTurnPending] = useState(false)
+  const [cityMapOpen, setCityMapOpen] = useState(false)
+  const [showYourTurnDialog, setShowYourTurnDialog] = useState(false)
+  const prevIsMyTurnRef = useRef<number | null>(null)
 
   const fetchAll = useCallback(async () => {
     if (!gameId) return
@@ -291,7 +319,13 @@ export default function GamePage() {
       const mapData    = await mapRes.json()
       const marketData = await marketRes.json()
 
-      if (stateData.success)  setFullState(stateData.data)
+      if (stateData.success) {
+        if (stateData.data?.game?.status === 'ended') {
+          nav(`/games/${gameId}/end`)
+          return
+        }
+        setFullState(stateData.data)
+      }
       if (mapData.success) {
         setMapCities(mapData.data.cities ?? [])
         setMapRoads(mapData.data.roads   ?? [])
@@ -318,10 +352,70 @@ export default function GamePage() {
     return () => clearInterval(interval)
   }, [fetchAll])
 
+  // Heartbeat — tell the server this player has the game open, every 60s while tab is visible
+  useEffect(() => {
+    if (!gameId) return
+    const ping = () => {
+      if (document.visibilityState === 'visible') {
+        fetch(`/api/games/${gameId}/heartbeat`, { method: 'POST' }).catch(() => {})
+      }
+    }
+    ping() // immediate ping on mount
+    const interval = setInterval(ping, 60_000)
+    document.addEventListener('visibilitychange', ping)
+    return () => {
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', ping)
+    }
+  }, [gameId])
+
+  async function dismissDrinks() {
+    await fetch(`/api/games/${gameId}/dismiss-drinks`, { method: 'POST' })
+    await fetchAll()
+  }
+
+  async function submitSabotage() {
+    if (!player?.currentCityId || !gameId) return
+    await fetch(`/api/games/${gameId}/sabotage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cityId: player.currentCityId }),
+    })
+    fetchAll()
+  }
+
   // ── Derived ────────────────────────────────────────────────────────────────
   const player  = fullState?.player
   const game    = fullState?.game
-  const isMyTurn  = player !== undefined && game !== undefined && player.turnOrder === game.currentPlayerIndex
+  // serverIsMyTurn reflects actual server state, unaffected by optimistic turnPending
+  const serverIsMyTurn = player !== undefined && game !== undefined && player.turnOrder === game.currentPlayerIndex
+  const isMyTurn = !turnPending && serverIsMyTurn
+
+  // Show "Your Turn" only when currentPlayerIndex genuinely transitions FROM another
+  // player's index TO ours — not when it stays on ours (NPC auto-skip loop) and not
+  // due to turnPending toggling serverIsMyTurn back and forth.
+  useEffect(() => {
+    const current = game?.currentPlayerIndex ?? null
+    const myOrder = player?.turnOrder ?? null
+    const prev    = prevIsMyTurnRef.current as number | null
+
+    prevIsMyTurnRef.current = current as any
+
+    if (prev === null || current === null || myOrder === null) return
+    if (current === myOrder && prev !== myOrder) {
+      setShowYourTurnDialog(true)
+    }
+  }, [game?.currentPlayerIndex, player?.turnOrder])
+
+  // Also show the dialog when a trap notification arrives mid-turn
+  const prevPendingTrapRef = useRef<unknown>(null)
+  useEffect(() => {
+    const prev = prevPendingTrapRef.current
+    prevPendingTrapRef.current = player?.pendingTrap ?? null
+    if (prev === null && player?.pendingTrap != null) {
+      setShowYourTurnDialog(true)
+    }
+  }, [player?.pendingTrap])
   const isInJail  = !!player?.jailUntilSeason && !!game && player.jailUntilSeason > game.currentSeason
   const seasonLabel       = game ? getSeasonLabel(game.currentSeason) : 'Spring 1921'
   const jailSeasonsLeft   = Math.max(0, (player?.jailUntilSeason ?? 0) - (game?.currentSeason ?? 0))
@@ -337,7 +431,8 @@ export default function GamePage() {
   const homeCity = player?.homeCityId != null
     ? mapCities.find(c => c.id === player.homeCityId) ?? null
     : null
-  const STILL_OUTPUT: Record<number, number> = { 1: 4, 2: 8, 3: 14, 4: 22, 5: 34 }
+  const STILL_OUTPUT: Record<number, number> = { 1: 2, 2: 4, 3: 7, 4: 11, 5: 17 }
+  const STILL_UPGRADE_COST: Record<number, number> = { 1: 200, 2: 500, 3: 1000, 4: 2000, 5: 4000 }
   const homeDistillery = (player?.distilleries ?? []).find(d => d.cityId === player?.homeCityId) ?? null
   const homeProduction = homeDistillery ? (STILL_OUTPUT[homeDistillery.tier] ?? 4) : 0
 
@@ -484,6 +579,15 @@ export default function GamePage() {
 
   function rollToMove() {
     if (!player) return
+    // If already rolled this turn, just re-enter move mode without re-rolling
+    if (diceRoll != null) {
+      const effective = applyCharModifier(diceRoll, player.characterClass)
+      setRemainingBudget(effective)
+      setVehicleMoves(player.vehicles.map(v => ({ vehicleId: v.id, targetPath: [], allocatedPoints: 0 })))
+      setSelectedVehicleId(player.vehicles[0]?.id ?? null)
+      setMoveMode(true)
+      return
+    }
     const numDice = player.vehicles.length + 1
     let rawTotal = 0
     for (let i = 0; i < numDice; i++) rawTotal += Math.ceil(Math.random() * 6)
@@ -497,27 +601,54 @@ export default function GamePage() {
 
   function cancelMove() {
     setMoveMode(false)
-    setDiceRoll(null)
+    // Keep diceRoll — player cannot re-roll once they've seen a result
     setVehicleMoves([])
     setSelectedVehicleId(null)
     setRemainingBudget(0)
   }
 
+  function closeAllDialogs() {
+    setMarketOpen(false)
+    setStillOpen(false)
+    setBribeOpen(false)
+    setVehicleOpen(false)
+    setCityDetailOpen(false)
+    setDistilleriesOpen(false)
+    setVehiclesOpen(false)
+    setNetWorthOpen(false)
+  }
+
   async function submitTurn(actions: unknown[], { refresh = true } = {}) {
-    const res  = await fetch(`/api/games/${gameId}/turn`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(actions)
-    })
-    const data = await res.json()
-    cancelMove()
-    if (data.policeEncounter) {
-      setPoliceEncounter(data.policeEncounter)
+    if (refresh) {
+      setTurnPending(true)
+      cancelMove()
+      closeAllDialogs()
+      // Yield to the browser so React can commit + paint the loading state
+      // before the fetch starts. rAF fires after the next paint frame.
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
     }
-    if (data.celebrations?.length) {
-      setCelebrationQueue(prev => [...prev, ...data.celebrations])
+    try {
+      const res  = await fetch(`/api/games/${gameId}/turn`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(actions)
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(`Turn failed (${res.status}): ${text}`)
+      }
+      const data = await res.json()
+      if (data.policeEncounter) {
+        setPoliceEncounter(data.policeEncounter)
+      }
+      if (data.celebrations?.length) {
+        setCelebrationQueue(prev => [...prev, ...data.celebrations])
+      }
+      if (refresh) { setDiceRoll(null); await fetchAll() }
+      else cancelMove()
+    } finally {
+      if (refresh) setTurnPending(false)
     }
-    if (refresh) fetchAll()
   }
 
   function handleCityClick(cityId: number) {
@@ -704,6 +835,43 @@ export default function GamePage() {
               </div>
             ) : null}
 
+            {/* Max players — host can adjust 2-5, others see current setting */}
+            {game.isHost ? (
+              <div className="bg-stone-800 border border-stone-600 rounded p-3">
+                <p className="text-stone-400 text-xs uppercase tracking-wider mb-2">Max Players</p>
+                <div className="flex gap-2">
+                  {[2, 3, 4, 5].map(n => (
+                    <button
+                      key={n}
+                      onClick={async () => {
+                        await fetch(`/api/games/${gameId}/max-players`, {
+                          method: 'PATCH',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ maxPlayers: n }),
+                        })
+                        fetchAll()
+                      }}
+                      className={`flex-1 py-1.5 rounded text-sm font-bold transition ${
+                        game.maxPlayers === n
+                          ? 'bg-amber-600 text-stone-900'
+                          : 'bg-stone-700 text-stone-400 hover:bg-stone-600'
+                      }`}
+                    >
+                      {n}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-stone-500 text-xs mt-2">
+                  Empty slots will be filled with NPC opponents.
+                </p>
+              </div>
+            ) : (
+              <div className="bg-stone-800 border border-stone-600 rounded p-3 text-center">
+                <p className="text-stone-400 text-xs uppercase tracking-wider mb-0.5">Max Players</p>
+                <p className="text-amber-300 font-bold">{game.maxPlayers}</p>
+              </div>
+            )}
+
             {/* Readiness panel */}
             <div className="bg-stone-800 border border-stone-600 rounded p-4">
               <p className="text-stone-400 text-xs uppercase tracking-wider mb-3">Players</p>
@@ -793,20 +961,31 @@ export default function GamePage() {
   }
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden">
+    <div className="flex flex-col h-screen overflow-hidden" style={{ paddingLeft: 'env(safe-area-inset-left)', paddingRight: 'env(safe-area-inset-right)', paddingBottom: 'env(safe-area-inset-bottom)' }}>
+      {/* Portrait-mode blocker */}
+      <div className="portrait-blocker hidden fixed inset-0 z-[9999] bg-stone-950 flex-col items-center justify-center gap-6 p-8">
+        <img src="/logo.png" alt="Prohibition" className="h-20 w-auto opacity-80" />
+        <p className="text-amber-400 text-2xl font-bold text-center">Rotate your device</p>
+        <p className="text-stone-400 text-sm text-center">This game is best played in landscape mode.</p>
+        <span className="text-5xl animate-spin" style={{ animationDuration: '3s' }}>📱</span>
+      </div>
+
       {/* Top bar */}
-      <div className="px-4 py-2 bg-stone-800 border-b border-stone-700 flex-shrink-0 flex items-center gap-3">
+      <div className="px-2 py-1 bg-stone-800 border-b border-stone-700 flex-shrink-0 flex items-center gap-2">
         <button
           onClick={() => nav('/games')}
-          className="text-stone-500 hover:text-stone-200 text-xs uppercase tracking-wide transition flex-shrink-0"
-          title="Back to game list"
+          className="flex items-center gap-1 flex-shrink-0 group"
+          title="Back to games"
         >
-          ← Games
+          <span className="text-stone-500 group-hover:text-amber-400 transition text-sm">←</span>
+          <img src="/logo.png" alt="Prohibition" className="h-8 w-auto group-hover:opacity-80 transition" />
         </button>
-        {game?.gameName && (
-          <span className="text-amber-400 font-bold text-sm flex-shrink-0 hidden sm:block">{game.gameName}</span>
-        )}
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+          {game?.gameName && (
+            <p className="text-xs text-stone-500 uppercase tracking-wider hidden sm:block">
+              Game: <span className="text-amber-400 font-bold">{game.gameName}</span>
+            </p>
+          )}
           <SeasonTimeline
             seasonLabel={seasonLabel}
             currentPlayerName={currentPlayerName}
@@ -817,14 +996,36 @@ export default function GamePage() {
             currentSeason={game?.currentSeason ?? 1}
           />
         </div>
+        {gameId && (
+          <button
+            onClick={() => setNetWorthOpen(true)}
+            className="flex items-center gap-1 px-2 py-1 rounded bg-stone-700 hover:bg-stone-600 text-stone-300 hover:text-amber-400 text-xs transition flex-shrink-0"
+            title="Standings"
+          >
+            🏆
+          </button>
+        )}
         {fullState && player && (
           <ChatPanel
             gameId={gameId!}
             myTurnOrder={player.turnOrder}
             players={fullState.players
               .sort((a, b) => a.turnOrder - b.turnOrder)
-              .map(p => ({ turnOrder: p.turnOrder, name: p.id === player.id ? 'You' : p.name, isYou: p.id === player.id }))}
+              .map(p => ({ id: p.id, turnOrder: p.turnOrder, name: p.id === player.id ? 'You' : p.name, isYou: p.id === player.id }))}
             playerColors={PLAYER_COLORS}
+            isMyTurn={isMyTurn}
+            inventoryItems={(player.vehicles ?? []).flatMap(v => v.inventory).filter(i => i.quantity > 0)}
+          />
+        )}
+        {fullState && player && (
+          <AlliancePanel
+            gameId={gameId!}
+            alliances={fullState.alliances ?? []}
+            otherPlayers={fullState.players
+              .filter(p => p.id !== player.id && !p.isNpc)
+              .map(p => ({ id: p.id, name: p.name }))}
+            myPlayerId={player.id}
+            onRefresh={fetchAll}
           />
         )}
       </div>
@@ -865,12 +1066,14 @@ export default function GamePage() {
                 )
               })()}
 
-              <HeatMeter heat={player?.heat ?? 0} />
+              <div data-tutorial="heat">
+                <HeatMeter heat={player?.heat ?? 0} />
+              </div>
 
               {homeCity && (() => {
                 const otherDists = (player?.distilleries ?? []).filter(d => d.cityId !== player?.homeCityId)
                 return (
-                  <div className="bg-stone-800 border border-amber-800 rounded p-2 text-xs">
+                  <div data-tutorial="distillery" className="bg-stone-800 border border-amber-800 rounded p-2 text-xs">
                     <div className="flex items-center justify-between mb-1">
                       <p className="text-amber-500 uppercase tracking-wider flex items-center gap-1">
                         <span>⌂</span> Home Distillery
@@ -940,7 +1143,11 @@ export default function GamePage() {
                 items={inventoryItems}
                 cargoCapacity={cargoCapacity}
                 cargoUsed={cargoUsed}
-                vehicleCount={player?.vehicles?.length ?? 1}
+                vehicles={(player?.vehicles ?? []).map(v => ({
+                  id: v.id,
+                  vehicleType: v.vehicleType,
+                  cityName: mapCities.find(c => c.id === v.cityId)?.name ?? `City ${v.cityId}`,
+                }))}
                 onManageFleet={() => setVehiclesOpen(true)}
               />
 
@@ -963,6 +1170,41 @@ export default function GamePage() {
         {/* Net worth dialog */}
         {netWorthOpen && gameId && (
           <NetWorthDialog gameId={gameId} onClose={() => setNetWorthOpen(false)} />
+        )}
+
+        {/* City Map dialog */}
+        {cityMapOpen && player?.currentCityId != null && (() => {
+          const city = mapCities.find(c => c.id === player.currentCityId)
+          if (!city) return null
+          const slug = city.name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '')
+          const vehicleAtCity = (player.vehicles ?? []).find(v => v.cityId === player.currentCityId) ?? null
+          return (
+            <CityMapDialog
+              gameId={gameId!}
+              cityName={city.name}
+              citySlug={slug}
+              populationTier={city.population_tier}
+              isMyTurn={isMyTurn}
+              playerCash={player.cash}
+              vehicleAtCity={vehicleAtCity ? { id: vehicleAtCity.id, inventory: vehicleAtCity.inventory } : null}
+              onClose={() => setCityMapOpen(false)}
+              onAction={() => fetchAll()}
+            />
+          )
+        })()}
+
+        {/* Your Turn dialog */}
+        {showYourTurnDialog && (
+          <DrinkDialog
+            drinks={player?.pendingDrinks ?? []}
+            pendingTrap={player?.pendingTrap ?? null}
+            onClose={() => {
+              setShowYourTurnDialog(false)
+              const hasDrinks = (player?.pendingDrinks ?? []).length > 0
+              const hasTrap = player?.pendingTrap != null
+              if (hasDrinks || hasTrap) dismissDrinks()
+            }}
+          />
         )}
 
         {/* Celebration dialog */}
@@ -989,6 +1231,29 @@ export default function GamePage() {
             onRun={() => { submitTurn([{ type: 'police_resolve', choice: 'run' }]); setPoliceEncounter(null) }}
           />
         )}
+
+        {/* Trap dialog */}
+        {trapOpen && gameId && (() => {
+          const myTrapCityIds = new Set((player?.myTraps ?? []).map(t => t.cityId))
+          const vehicleCities = (player?.vehicles ?? [])
+            .map(v => {
+              const city = mapCities.find(c => c.id === v.cityId)
+              if (!city) return null
+              return { cityId: city.id, cityName: city.name, alreadyTrapped: myTrapCityIds.has(city.id) }
+            })
+            .filter(Boolean) as Array<{ cityId: number; cityName: string; alreadyTrapped: boolean }>
+          const available = vehicleCities.filter(vc => !vc.alreadyTrapped)
+          if (available.length === 0) return null
+          return (
+            <TrapDialog
+              vehicleCities={vehicleCities}
+              playerCash={player?.cash ?? 0}
+              gameId={gameId}
+              onClose={() => setTrapOpen(false)}
+              onConfirm={() => { setTrapOpen(false); fetchAll() }}
+            />
+          )
+        })()}
 
         {/* Bribe dialog */}
         {bribeOpen && player?.currentCityId != null && (
@@ -1051,31 +1316,64 @@ export default function GamePage() {
 
         {/* Market dialog */}
         {marketOpen && (() => {
-          // Auto-detect vehicle at current city for market actions
-          const vehicleAtCity = player?.vehicles?.find(v => v.cityId === player?.currentCityId) ?? null
-          const marketVehicleId = vehicleAtCity?.id ?? null
-          const marketCargoUsed = vehicleAtCity?.inventory.reduce((s, i) => s + i.quantity, 0) ?? 0
-          const marketCargoSlots = CARGO_SLOTS[vehicleAtCity?.vehicleType ?? 'workhorse'] ?? 16
-          const marketCargoFree = marketCargoSlots - marketCargoUsed
-          const marketInventory = vehicleAtCity?.inventory
-            .filter(i => i.quantity > 0)
-            .map(i => ({ alcoholType: i.alcohol_type, units: i.quantity })) ?? []
+          const vehiclesAtCity = (player?.vehicles ?? []).filter(v => v.cityId === viewCityId)
+          // Combined capacity across all vehicles at this city
+          const marketCargoUsed = vehiclesAtCity.reduce((s, v) => s + v.inventory.reduce((vs, i) => vs + i.quantity, 0), 0)
+          const marketCargoFree = vehiclesAtCity.reduce((s, v) => s + (CARGO_SLOTS[v.vehicleType] ?? 16), 0) - marketCargoUsed
+          // Aggregate inventory across all vehicles at this city
+          const invMap = new Map<string, number>()
+          for (const v of vehiclesAtCity) {
+            for (const i of v.inventory) {
+              if (i.quantity > 0) invMap.set(i.alcohol_type, (invMap.get(i.alcohol_type) ?? 0) + i.quantity)
+            }
+          }
+          const marketInventory = [...invMap.entries()].map(([alcoholType, units]) => ({ alcoholType, units }))
+          const marketPricesForCity = marketPrices
+            .filter(p => p.cityId === viewCityId)
+            .sort((a, b) => b.price - a.price)
+          const canPickUpAtMarketCity = viewCityId != null &&
+            (player?.distilleryCityIds ?? []).includes(viewCityId)
+          const marketStock = canPickUpAtMarketCity
+            ? cityInventory.filter(r => r.city_id === viewCityId && r.quantity > 0)
+            : []
           return (
             <MarketDialog
-              cityName={mapCities.find(c => c.id === player?.currentCityId)?.name ?? 'Market'}
-              prices={currentCityPrices}
+              cityName={mapCities.find(c => c.id === viewCityId)?.name ?? 'Market'}
+              prices={marketPricesForCity}
               inventory={marketInventory}
-              distilleryStock={currentCityStock}
+              distilleryStock={marketStock}
               cash={player?.cash ?? 0}
               cargoFree={marketCargoFree}
-              currentCityId={player?.currentCityId}
+              currentCityId={viewCityId}
               onClose={() => setMarketOpen(false)}
               onAction={async (actions) => {
-                // Inject vehicleId into each action
-                const enriched = marketVehicleId != null
-                  ? actions.map(a => ({ ...a, vehicleId: marketVehicleId }))
-                  : actions
-                await submitTurn(enriched, { refresh: false })
+                // Distribute each action across vehicles at this city.
+                // For pickup/buy: send one action per vehicle with the full requested quantity;
+                // the backend clamps each to per-vehicle cargo space and available city stock,
+                // so using stale cargo amounts here is not needed.
+                // For sell: distribute using snapshot inventory (accurate at click time).
+                type RawAction = { type: string; alcoholType?: string; quantity?: number; [key: string]: unknown }
+                const expanded: RawAction[] = []
+                for (const action of actions as RawAction[]) {
+                  if ((action.type === 'pickup' || action.type === 'buy') && action.quantity && vehiclesAtCity.length > 1) {
+                    for (const v of vehiclesAtCity) {
+                      expanded.push({ ...action, vehicleId: v.id })
+                    }
+                  } else if (action.type === 'sell' && action.quantity && vehiclesAtCity.length > 1) {
+                    let remaining = action.quantity as number
+                    for (const v of vehiclesAtCity) {
+                      if (remaining <= 0) break
+                      const inVehicle = v.inventory.find(i => i.alcohol_type === action.alcoholType)?.quantity ?? 0
+                      if (inVehicle <= 0) continue
+                      const take = Math.min(remaining, inVehicle)
+                      expanded.push({ ...action, vehicleId: v.id, quantity: take })
+                      remaining -= take
+                    }
+                  } else {
+                    expanded.push({ ...action, vehicleId: vehiclesAtCity[0]?.id })
+                  }
+                }
+                await submitTurn(expanded, { refresh: false })
                 fetchAll()
               }}
             />
@@ -1083,7 +1381,10 @@ export default function GamePage() {
         })()}
 
         {/* Map area */}
-        <div className="relative flex-1 min-w-0 overflow-hidden bg-stone-950">
+        <div data-tutorial="map" className="relative flex-1 min-w-0 overflow-hidden bg-stone-950">
+          {turnPending && (
+            <div className="absolute inset-0 z-30 bg-black/40 flex items-center justify-center pointer-events-all cursor-wait" />
+          )}
           {isInJail && (
             <JailOverlay seasonsRemaining={jailSeasonsLeft} hasLawyerPerk={false} onPayLawyer={() => {}} characterClass={player?.characterClass} />
           )}
@@ -1130,21 +1431,31 @@ export default function GamePage() {
             )
           })()}
 
-          <div className="p-2 h-full relative z-10">
-            <SvgMap
-              cities={svgCities}
-              roads={svgRoads}
-              playerTokens={svgTokens}
-              currentCityId={player?.currentCityId ?? null}
-              homeCityId={player?.homeCityId ?? null}
-              selectedCityId={moveMode ? (selectedVehicle?.cityId ?? viewCityId) : viewCityId}
-              reachableCityIds={reachableCityIds}
-              pathCityIds={moveMode ? new Set(vehicleMoves.flatMap(vm => vm.targetPath)) : null}
-              cityStockpiles={cityStockpileTotal}
-              onCityClick={handleCityClick}
-              transparent={viewCityId != null}
-            />
-          </div>
+          <TransformWrapper
+            minScale={1}
+            maxScale={6}
+            centerOnInit
+            doubleClick={{ mode: 'reset' }}
+            panning={{ velocityDisabled: true }}
+          >
+            <TransformComponent wrapperStyle={{ width: '100%', height: '100%' }} contentStyle={{ width: '100%', height: '100%' }}>
+              <div className="p-2 w-full h-full">
+                <SvgMap
+                  cities={svgCities}
+                  roads={svgRoads}
+                  playerTokens={svgTokens}
+                  currentCityId={player?.currentCityId ?? null}
+                  homeCityId={player?.homeCityId ?? null}
+                  selectedCityId={moveMode ? (selectedVehicle?.cityId ?? viewCityId) : viewCityId}
+                  reachableCityIds={reachableCityIds}
+                  pathCityIds={moveMode ? new Set(vehicleMoves.flatMap(vm => vm.targetPath)) : null}
+                  cityStockpiles={cityStockpileTotal}
+                  onCityClick={handleCityClick}
+                  transparent={viewCityId != null}
+                />
+              </div>
+            </TransformComponent>
+          </TransformWrapper>
         </div>
 
         {/* Right sidebar */}
@@ -1154,9 +1465,9 @@ export default function GamePage() {
             onClick={() => setRightOpen(o => !o)}
             className="absolute top-1/2 -translate-y-1/2 -left-3 z-20 w-6 h-12 flex items-center justify-center bg-stone-700 hover:bg-amber-700 border border-stone-600 hover:border-amber-500 rounded-l text-stone-300 hover:text-white text-sm font-bold transition shadow-md"
           >{rightOpen ? '›' : '‹'}</button>
-        {rightOpen && <div className="p-3 pt-7 space-y-2 overflow-y-auto flex-1">
+        {rightOpen && <div data-tutorial="actions" className="p-3 pt-7 space-y-2 overflow-y-auto flex-1">
           {/* City info / fleet move panel */}
-          {moveMode ? (
+          {moveMode && !turnPending ? (
             <div className="space-y-2">
               <p className="text-xs text-stone-400 uppercase tracking-wider">Fleet</p>
               {(player?.vehicles ?? []).map(v => {
@@ -1251,6 +1562,14 @@ export default function GamePage() {
                     {city?.owner_player_id != null ? '⚔ Take Over' : '🏴 Claim'} — ${claimCost.toLocaleString()}
                   </button>
                 )}
+                {isAtCity && (
+                  <button
+                    onClick={() => setCityMapOpen(true)}
+                    className="w-full mt-1 py-1.5 border border-stone-600 hover:bg-stone-700 text-stone-300 text-xs font-bold rounded uppercase tracking-wide transition"
+                  >
+                    🗺 City Map
+                  </button>
+                )}
               </div>
             )
           })() : (
@@ -1260,7 +1579,8 @@ export default function GamePage() {
           <hr className="border-stone-700" />
           <p className="text-xs text-stone-400 uppercase tracking-wider">Turn Actions</p>
 
-          {isMyTurn && !isInJail ? (
+
+          {isMyTurn && !isInJail && !turnPending ? (
             <>
               {moveMode ? (
                 <div className="space-y-1">
@@ -1297,30 +1617,94 @@ export default function GamePage() {
                 </div>
               ) : (
                 <>
+                  {/* Fleet location summary */}
+                  {(player?.vehicles ?? []).length > 0 && (
+                    <div className="text-xs space-y-0.5">
+                      {(player?.vehicles ?? []).map(v => (
+                        <div key={v.id} className="flex items-center justify-between text-stone-500">
+                          <span className="capitalize">{v.vehicleType.replace(/_/g, ' ')}</span>
+                          <span className="text-stone-400">📍 {mapCities.find(c => c.id === v.cityId)?.name ?? `City ${v.cityId}`}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <button
                     onClick={rollToMove}
-                    className="w-full py-2 bg-amber-600 hover:bg-amber-500 text-stone-900 font-bold rounded uppercase tracking-wide text-sm transition"
+                    disabled={
+                      player?.stuckUntilSeason != null &&
+                      (game?.currentSeason ?? 0) <= player.stuckUntilSeason
+                    }
+                    title={
+                      player?.stuckUntilSeason != null && (game?.currentSeason ?? 0) <= player.stuckUntilSeason
+                        ? `Stuck here until season ${player.stuckUntilSeason}`
+                        : undefined
+                    }
+                    className="w-full py-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed text-stone-900 font-bold rounded uppercase tracking-wide text-sm transition"
                   >
-                    🎲 Roll to Move
+                    {player?.stuckUntilSeason != null && (game?.currentSeason ?? 0) <= player.stuckUntilSeason
+                      ? `⛓️ Stuck — Season ${player.stuckUntilSeason}`
+                      : diceRoll != null
+                      ? `🎲 Move (${diceRoll} rolled)`
+                      : '🎲 Roll to Move'}
                   </button>
                   <button
                     onClick={() => setMarketOpen(true)}
-                    className="w-full py-2 border border-amber-600 hover:bg-amber-900 text-amber-400 font-bold rounded uppercase tracking-wide text-sm transition"
+                    disabled={viewCityId == null || !(player?.vehicles ?? []).some(v => v.cityId === viewCityId)}
+                    className="w-full py-2 border border-amber-600 hover:bg-amber-900 disabled:opacity-40 disabled:cursor-not-allowed text-amber-400 font-bold rounded uppercase tracking-wide text-sm transition"
                   >
                     🏪 Market
                   </button>
-                  <button
-                    onClick={() => setStillOpen(true)}
-                    className="w-full py-2 border border-stone-600 hover:bg-stone-700 text-stone-300 font-bold rounded uppercase tracking-wide text-sm transition"
-                  >
-                    ⚗️ Upgrade Still
-                  </button>
+                  {(() => {
+                    const isOwnStill = player?.currentCityId != null &&
+                      (player.distilleryCityIds ?? []).includes(player.currentCityId)
+                    const competitorStill = player?.currentCityCompetitorStill
+                    const canSabotage = !isOwnStill && competitorStill != null && competitorStill.tier > 1
+                    const sabotageCost = competitorStill ? (STILL_UPGRADE_COST[competitorStill.tier] ?? 0) : 0
+                    const sabotageHeat = competitorStill ? competitorStill.tier * 10 : 0
+                    const canAffordSabotage = (player?.cash ?? 0) >= sabotageCost
+
+                    if (canSabotage) {
+                      return (
+                        <button
+                          onClick={submitSabotage}
+                          disabled={!canAffordSabotage}
+                          title={`Cost: $${sabotageCost.toLocaleString()} · Heat: +${sabotageHeat}`}
+                          className="w-full py-2 border border-red-800 hover:bg-red-900/40 disabled:opacity-40 disabled:cursor-not-allowed text-red-400 font-bold rounded uppercase tracking-wide text-sm transition"
+                        >
+                          💣 Sabotage Still — ${sabotageCost.toLocaleString()}
+                        </button>
+                      )
+                    }
+                    return (
+                      <button
+                        onClick={() => setStillOpen(true)}
+                        disabled={!isOwnStill}
+                        className="w-full py-2 border border-stone-600 hover:bg-stone-700 disabled:opacity-40 disabled:cursor-not-allowed text-stone-300 font-bold rounded uppercase tracking-wide text-sm transition"
+                      >
+                        ⚗️ Upgrade Still
+                      </button>
+                    )
+                  })()}
                   <button
                     onClick={() => setBribeOpen(true)}
                     className="w-full py-2 border border-stone-600 hover:bg-stone-700 text-stone-300 font-bold rounded uppercase tracking-wide text-sm transition"
                   >
                     💰 Bribe Official
                   </button>
+                  {(() => {
+                    const myTrapCityIds = new Set((player?.myTraps ?? []).map(t => t.cityId))
+                    const hasAvailableCity = (player?.vehicles ?? []).some(v => !myTrapCityIds.has(v.cityId))
+                    return (
+                      <button
+                        onClick={() => setTrapOpen(true)}
+                        disabled={!hasAvailableCity}
+                        title={!hasAvailableCity ? 'All vehicle cities already have traps set' : undefined}
+                        className="w-full py-2 border border-stone-600 hover:bg-stone-700 disabled:opacity-40 disabled:cursor-not-allowed text-stone-300 font-bold rounded uppercase tracking-wide text-sm transition"
+                      >
+                        🪤 Set Trap
+                      </button>
+                    )
+                  })()}
                   <hr className="border-stone-700" />
                   <button
                     onClick={() => submitTurn([{ type: 'skip' }])}
@@ -1331,6 +1715,12 @@ export default function GamePage() {
                 </>
               )}
             </>
+          ) : turnPending ? (
+            <div className="flex flex-col items-center justify-center gap-3 py-6 text-center">
+              <div className="text-3xl animate-spin" style={{ animationDuration: '1.2s' }}>🥃</div>
+              <p className="text-amber-400 font-bold text-sm uppercase tracking-wide">Running the hooch…</p>
+              <p className="text-stone-500 text-xs">Processing your turn</p>
+            </div>
           ) : isInJail ? (
             <div className="space-y-2">
               <p className="text-stone-500 text-sm italic">Serving time…</p>
@@ -1365,6 +1755,14 @@ export default function GamePage() {
         </div>}
         </div>
       </div>
+
+      {/* First-turn tutorial — shown once when it's your first turn */}
+      {player && !player.tutorialSeen && isMyTurn && game?.status === 'active' && (
+        <TutorialOverlay
+          gameId={gameId!}
+          onDone={() => fetchAll()}
+        />
+      )}
     </div>
   )
 }

@@ -17,11 +17,11 @@ export interface Distillery {
 }
 
 export const DISTILLERY_TIERS: Record<number, DistilleryTier> = {
-  1: { name: 'Stills (Moonshine base)', baseOutput: 4, heatPerSeason: 1, cost: 200 },
-  2: { name: 'Filters & Barrels',       baseOutput: 8, heatPerSeason: 2, cost: 500 },
-  3: { name: 'Aging Tanks',             baseOutput: 14, heatPerSeason: 4, cost: 1000 },
-  4: { name: 'Botanical Infusers',      baseOutput: 22, heatPerSeason: 7, cost: 2000 },
-  5: { name: 'Master Distillery',       baseOutput: 34, heatPerSeason: 12, cost: 4000 }
+  1: { name: 'Stills (Moonshine base)', baseOutput: 2, heatPerSeason: 1, cost: 200 },
+  2: { name: 'Filters & Barrels',       baseOutput: 4, heatPerSeason: 2, cost: 500 },
+  3: { name: 'Aging Tanks',             baseOutput: 7, heatPerSeason: 4, cost: 1000 },
+  4: { name: 'Botanical Infusers',      baseOutput: 11, heatPerSeason: 7, cost: 2000 },
+  5: { name: 'Master Distillery',       baseOutput: 17, heatPerSeason: 12, cost: 4000 }
 }
 
 export function getBaseOutput(tier: number): number {

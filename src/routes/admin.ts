@@ -106,36 +106,28 @@ adminRouter.delete('/games/:id', async (c) => {
   // 3. game_players (refs game_cities via home_city_id/current_city_id — must go before game_cities)
   // 4. game_cities, year_events
   // 5. games
-  await c.env.PROHIBITIONDB.batch([
-    c.env.PROHIBITIONDB.prepare(
-      `DELETE FROM npc_state WHERE player_id IN (SELECT id FROM game_players WHERE game_id = ?)`
-    ).bind(gameId),
-    c.env.PROHIBITIONDB.prepare(
-      `DELETE FROM heat_history WHERE player_id IN (SELECT id FROM game_players WHERE game_id = ?)`
-    ).bind(gameId),
-    c.env.PROHIBITIONDB.prepare(
-      `DELETE FROM jail_sentences WHERE player_id IN (SELECT id FROM game_players WHERE game_id = ?)`
-    ).bind(gameId),
-    c.env.PROHIBITIONDB.prepare(
-      `DELETE FROM inventory WHERE player_id IN (SELECT id FROM game_players WHERE game_id = ?)`
-    ).bind(gameId),
-    c.env.PROHIBITIONDB.prepare(
-      `DELETE FROM vehicle_inventory WHERE vehicle_id IN (SELECT id FROM vehicles WHERE player_id IN (SELECT id FROM game_players WHERE game_id = ?))`
-    ).bind(gameId),
-    c.env.PROHIBITIONDB.prepare(
-      `DELETE FROM vehicles WHERE player_id IN (SELECT id FROM game_players WHERE game_id = ?)`
-    ).bind(gameId),
-    c.env.PROHIBITIONDB.prepare(`DELETE FROM turns WHERE game_id = ?`).bind(gameId),
-    c.env.PROHIBITIONDB.prepare(
-      `DELETE FROM distilleries WHERE player_id IN (SELECT id FROM game_players WHERE game_id = ?)`
-    ).bind(gameId),
-    c.env.PROHIBITIONDB.prepare(`DELETE FROM city_inventory WHERE game_id = ?`).bind(gameId),
-    c.env.PROHIBITIONDB.prepare(`DELETE FROM market_prices  WHERE game_id = ?`).bind(gameId),
-    c.env.PROHIBITIONDB.prepare(`DELETE FROM roads          WHERE game_id = ?`).bind(gameId),
-    c.env.PROHIBITIONDB.prepare(`DELETE FROM game_players   WHERE game_id = ?`).bind(gameId),
-    c.env.PROHIBITIONDB.prepare(`DELETE FROM game_cities    WHERE game_id = ?`).bind(gameId),
-    c.env.PROHIBITIONDB.prepare(`DELETE FROM year_events    WHERE game_id = ?`).bind(gameId),
-    c.env.PROHIBITIONDB.prepare(`DELETE FROM games          WHERE id      = ?`).bind(gameId),
+  const db = c.env.PROHIBITIONDB
+  await db.batch([
+    db.prepare(`DELETE FROM npc_state        WHERE player_id IN (SELECT id FROM game_players WHERE game_id = ?)`).bind(gameId),
+    db.prepare(`DELETE FROM heat_history      WHERE player_id IN (SELECT id FROM game_players WHERE game_id = ?)`).bind(gameId),
+    db.prepare(`DELETE FROM jail_sentences    WHERE player_id IN (SELECT id FROM game_players WHERE game_id = ?)`).bind(gameId),
+    db.prepare(`DELETE FROM inventory         WHERE player_id IN (SELECT id FROM game_players WHERE game_id = ?)`).bind(gameId),
+    db.prepare(`DELETE FROM vehicle_inventory WHERE vehicle_id IN (SELECT id FROM vehicles WHERE player_id IN (SELECT id FROM game_players WHERE game_id = ?))`).bind(gameId),
+    db.prepare(`DELETE FROM vehicles          WHERE player_id IN (SELECT id FROM game_players WHERE game_id = ?)`).bind(gameId),
+    db.prepare(`DELETE FROM turns             WHERE game_id = ?`).bind(gameId),
+    db.prepare(`DELETE FROM distilleries      WHERE player_id IN (SELECT id FROM game_players WHERE game_id = ?)`).bind(gameId),
+    db.prepare(`DELETE FROM city_inventory    WHERE game_id = ?`).bind(gameId),
+    db.prepare(`DELETE FROM market_prices     WHERE game_id = ?`).bind(gameId),
+    db.prepare(`DELETE FROM alliance_chat     WHERE alliance_id IN (SELECT id FROM alliances WHERE game_id = ?)`).bind(gameId),
+    db.prepare(`DELETE FROM alliances         WHERE game_id = ?`).bind(gameId),
+    db.prepare(`DELETE FROM traps             WHERE game_id = ?`).bind(gameId),
+    db.prepare(`DELETE FROM city_stashes      WHERE game_id = ?`).bind(gameId),
+    db.prepare(`DELETE FROM game_messages     WHERE game_id = ?`).bind(gameId),
+    db.prepare(`DELETE FROM roads             WHERE game_id = ?`).bind(gameId),
+    db.prepare(`DELETE FROM game_players      WHERE game_id = ?`).bind(gameId),
+    db.prepare(`DELETE FROM game_cities       WHERE game_id = ?`).bind(gameId),
+    db.prepare(`DELETE FROM year_events       WHERE game_id = ?`).bind(gameId),
+    db.prepare(`DELETE FROM games             WHERE id      = ?`).bind(gameId),
   ])
 
   return c.json({ success: true })

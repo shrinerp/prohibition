@@ -40,7 +40,7 @@ export async function buildMarketPrices(
 
 const STARTING_CASH = 200
 const STARTING_ADJUSTMENT_CARDS = 3
-const MIN_CITIES = 15
+const MIN_CITIES = 12
 const MAX_CITIES = 20
 const MAX_PLAYERS = 5
 const REGIONS = ['Midwest', 'East Coast', 'South', 'West Coast', 'West'] as const
@@ -80,12 +80,12 @@ export class GameService {
 
   async joinGame(inviteCode: string, userId: number): Promise<GameResult> {
     const game = await this.env.PROHIBITIONDB.prepare(
-      `SELECT id, status, player_count FROM games WHERE invite_code = ?`
-    ).bind(inviteCode).first<{ id: string; status: string; player_count: number }>()
+      `SELECT id, status, player_count, max_players FROM games WHERE invite_code = ?`
+    ).bind(inviteCode).first<{ id: string; status: string; player_count: number; max_players: number }>()
 
     if (!game) return { success: false, message: 'Game not found' }
     if (game.status !== 'lobby') return { success: false, message: 'Game already started' }
-    if (game.player_count >= MAX_PLAYERS) return { success: false, message: 'Game is full' }
+    if (game.player_count >= game.max_players) return { success: false, message: 'Game is full' }
 
     const turnOrder = game.player_count
     await this.env.PROHIBITIONDB.prepare(
@@ -116,8 +116,8 @@ export class GameService {
 
   async startGame(gameId: string, userId: number): Promise<GameResult> {
     const game = await this.env.PROHIBITIONDB.prepare(
-      `SELECT id, status, host_user_id FROM games WHERE id = ?`
-    ).bind(gameId).first<{ id: string; status: string; host_user_id: number }>()
+      `SELECT id, status, host_user_id, max_players FROM games WHERE id = ?`
+    ).bind(gameId).first<{ id: string; status: string; host_user_id: number; max_players: number }>()
 
     if (!game) return { success: false, message: 'Game not found' }
     if (game.status !== 'lobby') return { success: false, message: 'Game already started' }
@@ -183,7 +183,7 @@ export class GameService {
     const shuffledNames = [...NPC_NAMES].sort(() => Math.random() - 0.5)
     let npcNameIndex = 0
 
-    for (let i = players.length; i < MAX_PLAYERS; i++) {
+    for (let i = players.length; i < game.max_players; i++) {
       const npcName = shuffledNames[npcNameIndex++ % shuffledNames.length]
       await this.env.PROHIBITIONDB.prepare(
         `INSERT INTO game_players (game_id, user_id, turn_order, character_class, is_npc, cash, heat, adjustment_cards, display_name)
@@ -232,6 +232,9 @@ export class GameService {
   }
 
   selectCities(pool: CityPoolRow[]): CityPoolRow[] {
+    // Filter out any pool entries missing real coordinates
+    pool = pool.filter(c => c.lat !== 0 && c.lon !== 0)
+
     // Minimum map distance between any two selected cities (degrees, ~130 km)
     const MIN_DIST = 1.5
     function tooClose(a: CityPoolRow, b: CityPoolRow): boolean {
@@ -277,6 +280,18 @@ export class GameService {
       if (conflictsWithSelected(city)) continue
       selected.push(city)
       used.add(city.id)
+    }
+
+    // Guarantee the minimum — if distance constraints were too aggressive, force-add
+    if (selected.length < MIN_CITIES) {
+      const forced = pool
+        .filter(c => !used.has(c.id))
+        .sort(() => Math.random() - 0.5)
+      for (const city of forced) {
+        if (selected.length >= MIN_CITIES) break
+        selected.push(city)
+        used.add(city.id)
+      }
     }
 
     return selected

@@ -1,8 +1,10 @@
 import React, { useState } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate, useLocation, Link } from 'react-router-dom'
 
 export default function LoginPage() {
   const nav = useNavigate()
+  const location = useLocation()
+  const redirect = new URLSearchParams(location.search).get('redirect') ?? '/games'
   const [email, setEmail]       = useState('')
   const [password, setPassword] = useState('')
   const [error, setError]       = useState('')
@@ -17,7 +19,7 @@ export default function LoginPage() {
     })
     const data = await res.json()
     if (data.success) {
-      nav('/games')
+      nav(redirect)
     } else {
       setError(data.message ?? 'Login failed')
     }
@@ -26,6 +28,9 @@ export default function LoginPage() {
   return (
     <div className="flex items-center justify-center min-h-screen">
       <form onSubmit={handleSubmit} className="bg-stone-800 p-8 rounded-lg w-full max-w-sm space-y-4">
+        <div className="flex justify-center mb-2">
+          <img src="/logo.png" alt="Prohibitioner" className="h-20 w-auto object-contain drop-shadow-lg" />
+        </div>
         <h2 className="text-2xl font-bold text-amber-400 text-center">Sign In</h2>
         {error && <p className="text-red-400 text-sm text-center">{error}</p>}
         <input

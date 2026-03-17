@@ -1,0 +1,29 @@
+<mjml>
+  <mj-head>
+    <mj-attributes>
+      <mj-all font-family="Georgia, serif" />
+      <mj-body background-color="#1a0f00" />
+    </mj-attributes>
+    <mj-style>
+      .sender { color: #c8a96e; font-weight: bold; }
+      .drink-name { color: #c8a96e; font-style: italic; }
+    </mj-style>
+  </mj-head>
+  <mj-body>
+    <mj-section background-color="#1a0f00" padding="40px 0 0">
+      <mj-column>
+        <mj-text align="center" color="#e8d5b0" font-size="22px" line-height="1.5">
+          <span class="sender">{{sender}}</span> sent you a drink
+        </mj-text>
+        <mj-text align="center" color="#e8d5b0" font-size="16px" padding-top="0">
+          A <span class="drink-name">{{drink}}</span>, to be precise.
+        </mj-text>
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#1a0f00" padding="20px 0 40px">
+      <mj-column>
+        <mj-image src="{{drinkImageUrl}}" width="160px" alt="{{drink}}" padding="0" />
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>

@@ -35,17 +35,18 @@ export interface BribeResult {
 
 /** Canonical heat deltas for each event */
 export const HEAT_CHANGES = {
-  cargoTravel:        2,
-  doubleCrossSuccess: 10,
-  doubleCrossFail:    20,
-  hostileTakeover:    15,
-  runFail:            30,
+  cargoTravel:        1,
+  doubleCrossSuccess: 8,
+  doubleCrossFail:    15,
+  hostileTakeover:    10,
+  runFail:            25,
+  naturalDecay:       -3,   // automatic per season
   idleDecay:          -5,   // per idle season
   moneyLaunder:       -25   // Social Club money laundering
 } as const
 
 /** Heat added per distillery tier per season */
-export const TIER_PASSIVE_HEAT: Record<number, number> = { 1: 1, 2: 2, 3: 4, 4: 7, 5: 12 }
+export const TIER_PASSIVE_HEAT: Record<number, number> = { 1: 0, 2: 1, 3: 1, 4: 2, 5: 4 }
 
 /** Bribe multiplier by city size */
 const TIER_BRIBE_MULTIPLIER: Record<PopulationTier, number> = {
@@ -104,7 +105,7 @@ export function resolveSubmit(currentHeat: number, alcoholUnits: number, cashOnH
   if (currentHeat >= 50) {
     return {
       alcoholSeized: alcoholUnits,
-      cashSeized:    Math.floor(cashOnHand * 0.5),
+      cashSeized:    alcoholUnits > 0 ? Math.floor(cashOnHand * 0.5) : 0,
       heatDelta:     -10
     }
   }

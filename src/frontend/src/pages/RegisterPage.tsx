@@ -27,6 +27,9 @@ export default function RegisterPage() {
   return (
     <div className="flex items-center justify-center min-h-screen">
       <form onSubmit={handleSubmit} className="bg-stone-800 p-8 rounded-lg w-full max-w-sm space-y-4">
+        <div className="flex justify-center mb-2">
+          <img src="/logo.png" alt="Prohibitioner" className="h-20 w-auto object-contain drop-shadow-lg" />
+        </div>
         <h2 className="text-2xl font-bold text-amber-400 text-center">Join the Syndicate</h2>
 
         {/* Age gate — clear 21+ messaging */}

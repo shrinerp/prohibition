@@ -88,21 +88,26 @@ export default function NetWorthDialog({ gameId, onClose }: NetWorthDialogProps)
                   <span className="text-green-400 font-bold tabular-nums">${p.total.toLocaleString()}</span>
                 </div>
 
-                {/* Stacked bar */}
+                {/* Stacked bar — width relative to leader so bars never overflow */}
                 <div className="flex h-2.5 rounded overflow-hidden gap-px mb-2">
-                  {COMPONENT_LABELS.map(c => {
-                    const val = p.components[c.key]
-                    const pct = (val / maxTotal) * 100
-                    if (pct < 0.5) return null
-                    return (
-                      <div
-                        key={c.key}
-                        className={`${c.color} opacity-80`}
-                        style={{ width: `${pct}%` }}
-                        title={`${c.label}: $${val.toLocaleString()}`}
-                      />
-                    )
-                  })}
+                  <div
+                    className="flex h-full gap-px overflow-hidden rounded"
+                    style={{ width: `${(p.total / maxTotal) * 100}%` }}
+                  >
+                    {COMPONENT_LABELS.map(c => {
+                      const val = p.components[c.key]
+                      const pct = p.total > 0 ? (val / p.total) * 100 : 0
+                      if (pct < 0.5) return null
+                      return (
+                        <div
+                          key={c.key}
+                          className={`${c.color} opacity-80 h-full`}
+                          style={{ width: `${pct}%` }}
+                          title={`${c.label}: $${val.toLocaleString()}`}
+                        />
+                      )
+                    })}
+                  </div>
                 </div>
 
                 {/* Breakdown */}

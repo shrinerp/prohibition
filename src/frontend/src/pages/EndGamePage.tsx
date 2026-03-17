@@ -1,72 +1,205 @@
 import React, { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, Link } from 'react-router-dom'
 
-interface Standing {
-  rank: number
-  playerName: string
-  netWorth: number
-  liquidCash: number
+interface PlayerNetWorth {
+  playerId: number
+  isYou: boolean
+  isNpc: boolean
+  name: string
+  components: {
+    cash: number
+    inventory: number
+    distilleries: number
+    vehicles: number
+    cities: number
+  }
+  total: number
+}
+
+const PLACE_LABELS: Record<number, string> = { 1: '1ST', 2: '2ND', 3: '3RD', 4: '4TH', 5: '5TH' }
+const PLACE_FLAVOUR: Record<number, string> = {
+  1: 'You built the greatest empire of the Prohibition era.',
+  2: 'A formidable operation — but one step short of the throne.',
+  3: 'Respectable. The law never caught you.',
+  4: 'You survived. Many didn\'t.',
+  5: 'The streets ate better bootleggers.',
+}
+
+const COMPONENT_LABELS: Array<{ key: keyof PlayerNetWorth['components']; label: string; color: string; bar: string }> = [
+  { key: 'cash',         label: 'Cash',    color: 'text-green-400',  bar: 'bg-green-500' },
+  { key: 'inventory',    label: 'Cargo',   color: 'text-amber-400',  bar: 'bg-amber-500' },
+  { key: 'distilleries', label: 'Stills',  color: 'text-orange-400', bar: 'bg-orange-500' },
+  { key: 'vehicles',     label: 'Fleet',   color: 'text-blue-400',   bar: 'bg-blue-500' },
+  { key: 'cities',       label: 'Cities',  color: 'text-purple-400', bar: 'bg-purple-500' },
+]
+
+const RANK_STYLES: Record<number, { medal: string; ring: string; nameColor: string }> = {
+  1: { medal: '🥇', ring: 'border-amber-400 shadow-[0_0_32px_rgba(251,191,36,0.3)]', nameColor: 'text-amber-300' },
+  2: { medal: '🥈', ring: 'border-stone-400 shadow-[0_0_16px_rgba(180,180,180,0.2)]', nameColor: 'text-stone-200' },
+  3: { medal: '🥉', ring: 'border-orange-700', nameColor: 'text-orange-300' },
 }
 
 export default function EndGamePage() {
   const { id: gameId } = useParams<{ id: string }>()
-  const [recap, setRecap]         = useState<string | null>(null)
-  const [standings, setStandings] = useState<Standing[]>([])
-  const [loading, setLoading]     = useState(true)
+  const [players, setPlayers] = useState<PlayerNetWorth[]>([])
+  const [recap, setRecap] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [fetchError, setFetchError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!gameId) return
-    fetch(`/api/games/${gameId}/recap`)
+    const nwFetch = fetch(`/api/games/${gameId}/networth`)
       .then(r => r.json())
-      .then(data => {
-        if (data.success && data.data) {
-          setRecap(data.data.recap)
+      .then((nw: { success: boolean; data?: { players: PlayerNetWorth[] }; message?: string }) => {
+        if (nw.success && nw.data?.players?.length > 0) {
+          setPlayers(nw.data.players)
+        } else {
+          setFetchError(`Standings unavailable: ${nw.message ?? JSON.stringify(nw)}`)
         }
       })
-      .finally(() => setLoading(false))
+      .catch(err => setFetchError(`Failed to load results: ${err}`))
+    const rcFetch = fetch(`/api/games/${gameId}/recap`)
+      .then(r => r.json())
+      .then((rc: { success: boolean; data?: { recap: string } }) => {
+        if (rc.success && rc.data?.recap) setRecap(rc.data.recap)
+      })
+      .catch(() => { /* recap optional */ })
+    Promise.all([nwFetch, rcFetch]).finally(() => setLoading(false))
   }, [gameId])
+
+  const me = players.find(p => p.isYou)
+  const myRank = me ? players.indexOf(me) + 1 : null
+  const maxTotal = players[0]?.total ?? 1
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <p className="text-stone-400 animate-pulse">Tallying fortunes…</p>
+      <div className="flex items-center justify-center min-h-screen bg-stone-950">
+        <p className="text-amber-400 animate-pulse text-lg tracking-widest uppercase">Tallying fortunes…</p>
       </div>
     )
   }
 
   return (
-    <div className="max-w-3xl mx-auto p-8 space-y-8">
-      <h1 className="text-4xl font-black text-amber-400 uppercase tracking-widest text-center">
-        Prohibition Ends
-      </h1>
-      <p className="text-stone-400 text-center">Winter 1933 — The 21st Amendment has passed.</p>
+    <div className="min-h-screen bg-stone-950 text-stone-100">
 
-      {standings.length > 0 && (
-        <section>
-          <h2 className="text-xl font-bold text-amber-300 mb-4">Final Standings</h2>
-          <ol className="space-y-2">
-            {standings.map(s => (
-              <li key={s.rank} className={`flex justify-between p-3 rounded ${s.rank === 1 ? 'bg-amber-900/40 border border-amber-600' : 'bg-stone-800'}`}>
-                <span className="font-bold">
-                  {s.rank === 1 ? '👑 ' : `${s.rank}. `}{s.playerName}
-                </span>
-                <span className="text-green-400 font-bold">${s.netWorth.toLocaleString()}</span>
-              </li>
-            ))}
-          </ol>
-        </section>
-      )}
+      {/* Hero */}
+      <div className="relative overflow-hidden border-b border-stone-800">
+        <div className="absolute inset-0 bg-gradient-to-b from-amber-950/30 to-stone-950" />
+        <div className="relative max-w-4xl mx-auto px-6 py-16 text-center space-y-4">
+          <img src="/logo.png" alt="Prohibition" className="h-24 w-auto mx-auto mb-4 drop-shadow-2xl" />
+          <h1 className="text-5xl font-black uppercase tracking-widest text-amber-400">
+            Prohibition Ends
+          </h1>
+          <p className="text-stone-400 text-lg">Winter 1933 — The 21st Amendment has passed.</p>
 
-      {recap && (
+          {/* Your placement */}
+          {me && myRank && (
+            <div className="mt-8 inline-block">
+              <div className={`border-2 rounded-2xl px-10 py-6 ${RANK_STYLES[myRank]?.ring ?? 'border-stone-600'}`}>
+                <p className="text-stone-500 text-xs uppercase tracking-widest mb-1">You finished</p>
+                <p className="text-7xl font-black text-amber-400 leading-none">
+                  {PLACE_LABELS[myRank] ?? `${myRank}TH`}
+                </p>
+                <p className="text-stone-400 text-sm mt-2 italic max-w-xs mx-auto">
+                  {PLACE_FLAVOUR[myRank] ?? 'The era is over.'}
+                </p>
+                <p className="text-green-400 font-bold text-2xl mt-3 tabular-nums">
+                  ${me.total.toLocaleString()}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="max-w-4xl mx-auto px-6 py-10 space-y-10">
+
+        {/* Final Standings */}
         <section>
-          <h2 className="text-xl font-bold text-amber-300 mb-4">Secret History</h2>
-          <div className="bg-stone-800 rounded p-6 prose prose-invert prose-amber max-w-none">
-            <pre className="whitespace-pre-wrap text-stone-300 text-sm leading-relaxed font-sans">
-              {recap}
-            </pre>
+          <h2 className="text-xs text-stone-500 uppercase tracking-widest mb-4">Final Standings</h2>
+          <div className="space-y-3">
+            {players.map((p, i) => {
+              const rank = i + 1
+              const style = RANK_STYLES[rank]
+              return (
+                <div
+                  key={p.playerId}
+                  className={`rounded-xl border p-4 ${
+                    p.isYou
+                      ? style?.ring ?? 'border-stone-600'
+                      : 'border-stone-700 bg-stone-900/60'
+                  } ${p.isYou ? 'bg-stone-900' : ''}`}
+                >
+                  {/* Name row */}
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-3">
+                      <span className="text-2xl leading-none">{style?.medal ?? `#${rank}`}</span>
+                      <div>
+                        <span className={`font-bold text-base ${style?.nameColor ?? 'text-stone-400'}`}>
+                          {p.name}
+                          {p.isYou && <span className="text-xs text-stone-500 font-normal ml-1.5">(you)</span>}
+                          {p.isNpc && <span className="text-xs text-stone-600 font-normal ml-1.5">(NPC)</span>}
+                        </span>
+                      </div>
+                    </div>
+                    <span className="text-green-400 font-black text-xl tabular-nums">${p.total.toLocaleString()}</span>
+                  </div>
+
+                  {/* Stacked bar */}
+                  <div className="flex h-3 rounded-full overflow-hidden gap-px mb-3 bg-stone-800">
+                    {COMPONENT_LABELS.map(c => {
+                      const val = p.components[c.key]
+                      const pct = (val / maxTotal) * 100
+                      if (pct < 0.5) return null
+                      return (
+                        <div
+                          key={c.key}
+                          className={`${c.bar} opacity-80 transition-all`}
+                          style={{ width: `${pct}%` }}
+                          title={`${c.label}: $${val.toLocaleString()}`}
+                        />
+                      )
+                    })}
+                  </div>
+
+                  {/* Breakdown */}
+                  <div className="grid grid-cols-5 gap-2 text-center">
+                    {COMPONENT_LABELS.map(c => (
+                      <div key={c.key} className="bg-stone-800/60 rounded p-1.5">
+                        <p className="text-stone-500 text-[10px] uppercase tracking-wide">{c.label}</p>
+                        <p className={`${c.color} text-xs font-bold tabular-nums`}>${p.components[c.key].toLocaleString()}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
           </div>
         </section>
-      )}
+
+        {/* Secret History */}
+        {recap && (
+          <section>
+            <h2 className="text-xs text-stone-500 uppercase tracking-widest mb-4">Secret History</h2>
+            <div className="bg-stone-900 border border-stone-700 rounded-xl p-6">
+              <pre className="whitespace-pre-wrap text-stone-300 text-sm leading-relaxed font-sans">
+                {recap}
+              </pre>
+            </div>
+          </section>
+        )}
+
+        {/* Back */}
+        <div className="text-center pb-8">
+          <Link
+            to="/games"
+            className="inline-block px-8 py-3 bg-amber-700 hover:bg-amber-600 text-amber-100 font-bold rounded uppercase tracking-wide transition"
+          >
+            ← Back to Games
+          </Link>
+        </div>
+
+      </div>
     </div>
   )
 }
