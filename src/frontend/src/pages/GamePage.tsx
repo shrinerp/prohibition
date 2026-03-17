@@ -6,6 +6,7 @@ import InventoryPanel from '../components/InventoryPanel'
 import MarketPanel    from '../components/MarketPanel'
 import SeasonTimeline from '../components/SeasonTimeline'
 import JailOverlay    from '../components/JailOverlay'
+import MissionPanel   from '../components/MissionPanel'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const GAME_START_YEAR   = 1921
@@ -38,6 +39,7 @@ interface FullState {
     currentCityId: number | null; homeCityId: number | null
     adjustmentCards: number
     inventory: Array<{ alcohol_type: string; quantity: number }>
+    missions: Array<{ id: number; cardId: number; progress: Record<string, unknown>; assignedSeason: number }>
   }
   players: PlayerInfo[]
 }
@@ -70,6 +72,7 @@ export default function GamePage() {
   const [moveMode,     setMoveMode]     = useState(false)
   const [movePath,     setMovePath]     = useState<number[]>([])
   const [diceRoll,     setDiceRoll]     = useState<number | null>(null)
+  const [missionsOpen, setMissionsOpen] = useState(false)
 
   const fetchAll = useCallback(async () => {
     if (!gameId) return
@@ -469,6 +472,17 @@ export default function GamePage() {
                   </button>
                   <hr className="border-stone-700" />
                   <button
+                    onClick={() => setMissionsOpen(true)}
+                    className="w-full py-2 border border-purple-700 hover:bg-purple-900/40 text-purple-400 font-bold rounded uppercase tracking-wide text-sm transition flex items-center justify-center gap-1"
+                  >
+                    Missions
+                    {(player?.missions?.length ?? 0) > 0 && (
+                      <span className="bg-purple-700 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-black">
+                        {player?.missions?.length}
+                      </span>
+                    )}
+                  </button>
+                  <button
                     onClick={() => submitTurn([{ type: 'skip' }])}
                     className="w-full py-2 text-stone-500 hover:text-stone-300 text-xs uppercase tracking-wide transition"
                   >
@@ -482,6 +496,21 @@ export default function GamePage() {
               {isInJail ? 'Serving time…' : `Waiting for ${currentPlayerName}`}
             </p>
           )}
+
+          {/* Missions button (always visible) */}
+          <div className="pt-2 border-t border-stone-700">
+            <button
+              onClick={() => setMissionsOpen(true)}
+              className="w-full py-1.5 border border-purple-800 hover:bg-purple-900/30 text-purple-500 rounded uppercase tracking-wide text-xs transition flex items-center justify-center gap-1"
+            >
+              View Missions
+              {(player?.missions?.length ?? 0) > 0 && (
+                <span className="bg-purple-700 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-black">
+                  {player?.missions?.length}
+                </span>
+              )}
+            </button>
+          </div>
 
           {/* Player list */}
           {fullState && (
@@ -500,6 +529,19 @@ export default function GamePage() {
           )}
         </div>
       </div>
+
+      {/* Mission Panel overlay */}
+      {missionsOpen && (
+        <MissionPanel
+          missions={player?.missions ?? []}
+          onClose={() => setMissionsOpen(false)}
+          onDrawCard={() => {
+            setMissionsOpen(false)
+            submitTurn([{ type: 'draw_mission' }])
+          }}
+          canDraw={isMyTurn && !isInJail && (player?.missions?.length ?? 0) < 3}
+        />
+      )}
     </div>
   )
 }
