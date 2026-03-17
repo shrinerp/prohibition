@@ -5,7 +5,7 @@ import { sessionAuth } from '../middleware/sessionAuth'
 import { GameService } from '../services/GameService'
 import { calculateEffectiveMovement, resolveMovement, type RoadSegment } from '../game/movement'
 import { generateRoads } from '../game/mapEngine'
-import { updateCumulativeProgress } from '../game/missions'
+import { updateCumulativeProgress, checkAndCompleteMissions, drawMission, getMissionCard, type MissionSnapshot } from '../game/missions'
 
 export const gamesRouter = new Hono<{ Bindings: Env; Variables: AuthVariables }>()
 
@@ -117,6 +117,10 @@ gamesRouter.post('/:id/turn', async (c) => {
     type: string; targetPath?: number[]; roll?: number
     alcoholType?: string; quantity?: number; duration?: number
   }
+  const celebrations: Array<{
+    type: string; cityId?: number; newTier?: number; vehicleId?: string;
+    missionCardId?: number; reward?: number
+  }> = []
 
   for (const action of actions as Action[]) {
 
@@ -203,6 +207,54 @@ gamesRouter.post('/:id/turn', async (c) => {
         await updateCumulativeProgress(c.env.PROHIBITIONDB, playerRow.id, { type: 'official_bribed' })
       }
     }
+
+    // ── Draw Mission ────────────────────────────────────────────────────────
+    if (action.type === 'draw_mission') {
+      const countRow = await c.env.PROHIBITIONDB.prepare(
+        `SELECT COUNT(*) AS count FROM player_missions WHERE player_id = ? AND status = 'held'`
+      ).bind(playerRow.id).first<{ count: number }>()
+      if ((countRow?.count ?? 0) < 3) {
+        await drawMission(c.env.PROHIBITIONDB, gameId, playerRow.id, playerRow.current_season)
+      }
+    }
+  }
+
+  // ── Check mission completion (after all actions, before turn advance) ──────
+  {
+    const [freshRow, maxTierRow, cityCountRow, cargoRows] = await Promise.all([
+      c.env.PROHIBITIONDB.prepare(
+        `SELECT cash, heat, total_cash_earned, consecutive_clean_seasons FROM game_players WHERE id = ?`
+      ).bind(playerRow.id).first<{ cash: number; heat: number; total_cash_earned: number; consecutive_clean_seasons: number }>(),
+      c.env.PROHIBITIONDB.prepare(
+        `SELECT MAX(tier) AS max_tier FROM distilleries WHERE player_id = ?`
+      ).bind(playerRow.id).first<{ max_tier: number | null }>(),
+      c.env.PROHIBITIONDB.prepare(
+        `SELECT COUNT(*) AS cnt FROM game_cities WHERE owner_player_id = ? AND game_id = ?`
+      ).bind(playerRow.id, gameId).first<{ cnt: number }>(),
+      c.env.PROHIBITIONDB.prepare(
+        `SELECT alcohol_type, quantity FROM inventory WHERE player_id = ? AND quantity > 0`
+      ).bind(playerRow.id).all<{ alcohol_type: string; quantity: number }>(),
+    ])
+    const cargoByType: Record<string, number> = {}
+    let totalCargoUnits = 0
+    for (const r of cargoRows.results) { cargoByType[r.alcohol_type] = r.quantity; totalCargoUnits += r.quantity }
+    const snapshot: MissionSnapshot = {
+      cash: freshRow?.cash ?? 0,
+      citiesOwned: cityCountRow?.cnt ?? 0,
+      vehiclesOwned: 1, // single vehicle per player in this schema
+      maxDistilleryTier: maxTierRow?.max_tier ?? 1,
+      totalCargoUnits,
+      cargoByType,
+      heat: freshRow?.heat ?? 0,
+      totalCashEarned: freshRow?.total_cash_earned ?? 0,
+      consecutiveCleanSeasons: freshRow?.consecutive_clean_seasons ?? 0,
+    }
+    const missionResult = await checkAndCompleteMissions(
+      c.env.PROHIBITIONDB, gameId, playerRow.id, playerRow.current_season, snapshot
+    )
+    for (const cardId of missionResult.completedCardIds) {
+      celebrations.push({ type: 'mission_complete', missionCardId: cardId, reward: getMissionCard(cardId)?.reward ?? 0 })
+    }
   }
 
   // Advance turn index, wrapping back to 0 and bumping season when all players have gone
@@ -229,7 +281,7 @@ gamesRouter.post('/:id/turn', async (c) => {
     `UPDATE games SET current_player_index = ?, current_season = ? WHERE id = ?`
   ).bind(nextIndex, nextSeason, gameId).run()
 
-  return c.json({ success: true })
+  return c.json({ success: true, celebrations })
 })
 
 gamesRouter.get('/:id/market', async (c) => {
