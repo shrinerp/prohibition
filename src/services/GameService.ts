@@ -1,5 +1,6 @@
 import type { Env } from '../index'
 import { buildGraph, generateRoads } from '../game/mapEngine'
+import { initMissionDeck, dealInitialMissions } from '../game/missions'
 
 // ── Market price constants ────────────────────────────────────────────────────
 export const ALCOHOL_BASE_PRICES: Record<string, number> = {
@@ -223,6 +224,14 @@ export class GameService {
     await buildMarketPrices(this.env.PROHIBITIONDB, gameId, 1, cityPriceData)
 
     // Set deadline for first turn
+    // Initialize mission deck and deal 2 cards to each human player
+    await initMissionDeck(this.env.PROHIBITIONDB, gameId)
+    const { results: humanPlayers } = await this.env.PROHIBITIONDB.prepare(
+      `SELECT id FROM game_players WHERE game_id = ? AND is_npc = 0 ORDER BY turn_order`
+    ).bind(gameId).all<{ id: number }>()
+    await dealInitialMissions(this.env.PROHIBITIONDB, gameId, humanPlayers.map(p => p.id), 1)
+
+    // Assign home bases and set deadline for first turn
     const deadline = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
     await this.env.PROHIBITIONDB.prepare(
       `UPDATE games SET status = 'active', current_season = 1, turn_deadline = ? WHERE id = ?`

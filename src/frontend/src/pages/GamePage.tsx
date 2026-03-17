@@ -20,6 +20,7 @@ import TrapDialog from '../components/TrapDialog'
 import AlliancePanel from '../components/AlliancePanel'
 import TutorialOverlay from '../components/TutorialOverlay'
 import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch'
+import MissionPanel   from '../components/MissionPanel'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const ALCOHOL_EMOJI: Record<string, string> = {
@@ -73,6 +74,7 @@ interface FullState {
     distilleryCityIds: number[]
     bribedCityIds: number[]
     distilleries: Array<{ id: number; cityId: number; tier: number; primaryAlcohol: string; cityName: string }>
+    missions: Array<{ id: number; cardId: number; progress: Record<string, unknown>; assignedSeason: number }>
   }
   players: PlayerInfo[]
   alliances: Array<{
@@ -301,6 +303,7 @@ export default function GamePage() {
   const [cityMapOpen, setCityMapOpen] = useState(false)
   const [showYourTurnDialog, setShowYourTurnDialog] = useState(false)
   const prevIsMyTurnRef = useRef<number | null>(null)
+  const [missionsOpen, setMissionsOpen] = useState(false)
 
   const fetchAll = useCallback(async () => {
     if (!gameId) return
@@ -1707,6 +1710,17 @@ export default function GamePage() {
                   })()}
                   <hr className="border-stone-700" />
                   <button
+                    onClick={() => setMissionsOpen(true)}
+                    className="w-full py-2 border border-purple-700 hover:bg-purple-900/40 text-purple-400 font-bold rounded uppercase tracking-wide text-sm transition flex items-center justify-center gap-1"
+                  >
+                    Missions
+                    {(player?.missions?.length ?? 0) > 0 && (
+                      <span className="bg-purple-700 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-black">
+                        {player?.missions?.length}
+                      </span>
+                    )}
+                  </button>
+                  <button
                     onClick={() => submitTurn([{ type: 'skip' }])}
                     className="w-full py-2 text-stone-500 hover:text-stone-300 text-xs uppercase tracking-wide transition"
                   >
@@ -1736,6 +1750,21 @@ export default function GamePage() {
             <p className="text-stone-500 text-sm italic">Waiting for {currentPlayerName}</p>
           )}
 
+          {/* Missions button (always visible) */}
+          <div className="pt-2 border-t border-stone-700">
+            <button
+              onClick={() => setMissionsOpen(true)}
+              className="w-full py-1.5 border border-purple-800 hover:bg-purple-900/30 text-purple-500 rounded uppercase tracking-wide text-xs transition flex items-center justify-center gap-1"
+            >
+              View Missions
+              {(player?.missions?.length ?? 0) > 0 && (
+                <span className="bg-purple-700 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-black">
+                  {player?.missions?.length}
+                </span>
+              )}
+            </button>
+          </div>
+
           {/* Player list */}
           {fullState && (
             <div className="pt-2 border-t border-stone-700 space-y-1">
@@ -1761,6 +1790,18 @@ export default function GamePage() {
         <TutorialOverlay
           gameId={gameId!}
           onDone={() => fetchAll()}
+        />
+      )}
+      {/* Mission Panel overlay */}
+      {missionsOpen && (
+        <MissionPanel
+          missions={player?.missions ?? []}
+          onClose={() => setMissionsOpen(false)}
+          onDrawCard={() => {
+            setMissionsOpen(false)
+            submitTurn([{ type: 'draw_mission' }])
+          }}
+          canDraw={isMyTurn && !isInJail && (player?.missions?.length ?? 0) < 3}
         />
       )}
     </div>
