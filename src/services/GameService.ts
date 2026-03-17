@@ -1,4 +1,5 @@
 import type { Env } from '../index'
+import { initMissionDeck, dealInitialMissions } from '../game/missions'
 
 const STARTING_CASH = 200
 const STARTING_ADJUSTMENT_CARDS = 3
@@ -108,6 +109,13 @@ export class GameService {
          VALUES (?, NULL, ?, 'npc_syndicate', 1, ?, ?, ?)`
       ).bind(gameId, i, STARTING_CASH, 0, STARTING_ADJUSTMENT_CARDS).run()
     }
+
+    // Initialize mission deck and deal 2 cards to each human player
+    await initMissionDeck(this.env.PROHIBITIONDB, gameId)
+    const { results: humanPlayers } = await this.env.PROHIBITIONDB.prepare(
+      `SELECT id FROM game_players WHERE game_id = ? AND is_npc = 0 ORDER BY turn_order`
+    ).bind(gameId).all<{ id: number }>()
+    await dealInitialMissions(this.env.PROHIBITIONDB, gameId, humanPlayers.map(p => p.id), 1)
 
     // Assign home bases and set deadline for first turn
     const deadline = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
