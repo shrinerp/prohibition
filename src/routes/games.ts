@@ -277,6 +277,54 @@ gamesRouter.post('/:id/turn', async (c) => {
     nextSeason += nextIndex === 0 ? 1 : 0
   }
 
+  // ── Season rollover ───────────────────────────────────────────────────────
+  const isSeasonRollover = nextIndex === 0 && nextSeason > playerRow.current_season
+  if (isSeasonRollover) {
+    // Update consecutive_clean_seasons: reset for jailed players, +1 for clean
+    await c.env.PROHIBITIONDB.prepare(`
+      UPDATE game_players
+      SET consecutive_clean_seasons = CASE
+        WHEN jail_until_season IS NOT NULL AND jail_until_season >= ? THEN 0
+        ELSE consecutive_clean_seasons + 1
+      END
+      WHERE game_id = ?
+    `).bind(nextSeason, gameId).run()
+
+    // End-game: season 52 completed (nextSeason would be 53)
+    if (nextSeason > 52) {
+      // Apply end-game penalties for incomplete missions (human players only)
+      const { results: incompleteMissions } = await c.env.PROHIBITIONDB.prepare(
+        `SELECT pm.player_id, pm.card_id FROM player_missions pm
+         JOIN game_players gp ON pm.player_id = gp.id
+         WHERE gp.game_id = ? AND pm.status = 'held' AND gp.is_npc = 0`
+      ).bind(gameId).all<{ player_id: number; card_id: number }>()
+
+      if (incompleteMissions.length > 0) {
+        const penaltyMap = new Map<number, number>()
+        for (const m of incompleteMissions) {
+          const card = getMissionCard(m.card_id)
+          if (card) penaltyMap.set(m.player_id, (penaltyMap.get(m.player_id) ?? 0) + card.reward)
+        }
+        const penaltyPlayerIds = [...penaltyMap.keys()]
+        await Promise.all([
+          c.env.PROHIBITIONDB.prepare(
+            `UPDATE player_missions SET status = 'failed', penalty_paid = 1
+             WHERE player_id IN (${penaltyPlayerIds.map(() => '?').join(',')}) AND status = 'held'`
+          ).bind(...penaltyPlayerIds).run(),
+          ...[...penaltyMap.entries()].map(([pid, penalty]) =>
+            c.env.PROHIBITIONDB.prepare(
+              `UPDATE game_players SET cash = MAX(0, cash - ?) WHERE id = ?`
+            ).bind(penalty, pid).run()
+          ),
+        ])
+      }
+
+      await c.env.PROHIBITIONDB.prepare(
+        `UPDATE games SET status = 'ended' WHERE id = ?`
+      ).bind(gameId).run()
+    }
+  }
+
   await c.env.PROHIBITIONDB.prepare(
     `UPDATE games SET current_player_index = ?, current_season = ? WHERE id = ?`
   ).bind(nextIndex, nextSeason, gameId).run()
@@ -334,9 +382,15 @@ gamesRouter.get('/:id/state', async (c) => {
     current_city_id: number | null; cash: number; email: string | null
   }>()
 
-  const { results: inventory } = await c.env.PROHIBITIONDB.prepare(
-    `SELECT alcohol_type, quantity FROM inventory WHERE player_id = ?`
-  ).bind(player.id).all<{ alcohol_type: string; quantity: number }>()
+  const [{ results: inventory }, { results: missionRows }] = await Promise.all([
+    c.env.PROHIBITIONDB.prepare(
+      `SELECT alcohol_type, quantity FROM inventory WHERE player_id = ?`
+    ).bind(player.id).all<{ alcohol_type: string; quantity: number }>(),
+    c.env.PROHIBITIONDB.prepare(
+      `SELECT id, card_id, status, progress, assigned_season
+       FROM player_missions WHERE player_id = ? AND status = 'held' ORDER BY assigned_season`
+    ).bind(player.id).all<{ id: number; card_id: number; status: string; progress: string; assigned_season: number }>(),
+  ])
 
   return c.json({
     success: true,
@@ -360,7 +414,13 @@ gamesRouter.get('/:id/state', async (c) => {
         currentCityId:    player.current_city_id,
         homeCityId:       player.home_city_id,
         adjustmentCards:  player.adjustment_cards,
-        inventory:        inventory
+        inventory:        inventory,
+        missions:         missionRows.map(m => ({
+          id:             m.id,
+          cardId:         m.card_id,
+          progress:       JSON.parse(m.progress),
+          assignedSeason: m.assigned_season,
+        }))
       },
       players: players.map(p => ({
         id:            p.id,
