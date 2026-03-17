@@ -5,6 +5,7 @@ import { sessionAuth } from '../middleware/sessionAuth'
 import { GameService } from '../services/GameService'
 import { calculateEffectiveMovement, resolveMovement, type RoadSegment } from '../game/movement'
 import { generateRoads } from '../game/mapEngine'
+import { updateCumulativeProgress } from '../game/missions'
 
 export const gamesRouter = new Hono<{ Bindings: Env; Variables: AuthVariables }>()
 
@@ -112,12 +113,17 @@ gamesRouter.post('/:id/turn', async (c) => {
   ).bind(gameId, playerRow.id, playerRow.current_season, JSON.stringify(actions)).run()
 
   // Resolve actions
-  for (const action of actions as Array<{ type: string; targetPath?: number[]; roll?: number }>) {
+  type Action = {
+    type: string; targetPath?: number[]; roll?: number
+    alcoholType?: string; quantity?: number; duration?: number
+  }
+
+  for (const action of actions as Action[]) {
+
+    // ── Move ────────────────────────────────────────────────────────────────
     if (action.type === 'move' && action.targetPath && action.targetPath.length > 0 && playerRow.current_city_id != null) {
-      // Validate movement using the declared roll and character/vehicle modifiers
       const roll = (typeof action.roll === 'number' && action.roll >= 2 && action.roll <= 12)
-        ? action.roll
-        : 7 // fallback to average if missing
+        ? action.roll : 7
 
       const movementPoints = calculateEffectiveMovement(roll, playerRow.character_class, playerRow.vehicle)
 
@@ -126,9 +132,7 @@ gamesRouter.post('/:id/turn', async (c) => {
       ).bind(gameId).all<{ from_city_id: number; to_city_id: number; distance_value: number }>()
 
       const roads: RoadSegment[] = roadRows.map(r => ({
-        fromCityId:    r.from_city_id,
-        toCityId:      r.to_city_id,
-        distanceValue: r.distance_value
+        fromCityId: r.from_city_id, toCityId: r.to_city_id, distanceValue: r.distance_value
       }))
 
       const result = resolveMovement(playerRow.current_city_id, action.targetPath, roads, movementPoints)
@@ -136,6 +140,68 @@ gamesRouter.post('/:id/turn', async (c) => {
       await c.env.PROHIBITIONDB.prepare(
         `UPDATE game_players SET current_city_id = ? WHERE id = ?`
       ).bind(result.currentCityId, playerRow.id).run()
+
+      // Track city visit for mission progress
+      if (result.currentCityId !== playerRow.current_city_id) {
+        await updateCumulativeProgress(c.env.PROHIBITIONDB, playerRow.id, {
+          type: 'city_visited', cityId: result.currentCityId
+        })
+      }
+    }
+
+    // ── Sell ────────────────────────────────────────────────────────────────
+    if (action.type === 'sell' && action.alcoholType && action.quantity && action.quantity > 0 && playerRow.current_city_id != null) {
+      const [priceRow, invRow] = await Promise.all([
+        c.env.PROHIBITIONDB.prepare(
+          `SELECT price FROM market_prices WHERE game_id = ? AND city_id = ? AND season = ? AND alcohol_type = ?`
+        ).bind(gameId, playerRow.current_city_id, playerRow.current_season, action.alcoholType)
+          .first<{ price: number }>(),
+        c.env.PROHIBITIONDB.prepare(
+          `SELECT quantity FROM inventory WHERE player_id = ? AND alcohol_type = ?`
+        ).bind(playerRow.id, action.alcoholType).first<{ quantity: number }>(),
+      ])
+
+      const available = invRow?.quantity ?? 0
+      const toSell = Math.min(action.quantity, available)
+
+      if (toSell > 0 && priceRow) {
+        const revenue = Math.round(toSell * priceRow.price)
+        await c.env.PROHIBITIONDB.prepare(
+          `UPDATE inventory SET quantity = quantity - ? WHERE player_id = ? AND alcohol_type = ?`
+        ).bind(toSell, playerRow.id, action.alcoholType).run()
+        await c.env.PROHIBITIONDB.prepare(
+          `UPDATE game_players SET cash = cash + ?, total_cash_earned = total_cash_earned + ? WHERE id = ?`
+        ).bind(revenue, revenue, playerRow.id).run()
+        await updateCumulativeProgress(c.env.PROHIBITIONDB, playerRow.id, {
+          type: 'sold_units', quantity: toSell, alcoholType: action.alcoholType, revenue
+        })
+      }
+    }
+
+    // ── Bribe Official ──────────────────────────────────────────────────────
+    if (action.type === 'bribe_official' && playerRow.current_city_id != null) {
+      const cityRow = await c.env.PROHIBITIONDB.prepare(
+        `SELECT cp.bribe_cost_multiplier FROM game_cities gc
+         JOIN city_pool cp ON gc.city_pool_id = cp.id WHERE gc.id = ?`
+      ).bind(playerRow.current_city_id).first<{ bribe_cost_multiplier: number }>()
+
+      const baseCost = 200
+      const bribeCost = Math.round(baseCost * (cityRow?.bribe_cost_multiplier ?? 1.0))
+      const duration = typeof action.duration === 'number' ? action.duration : 4
+
+      const freshCash = await c.env.PROHIBITIONDB.prepare(
+        `SELECT cash FROM game_players WHERE id = ?`
+      ).bind(playerRow.id).first<{ cash: number }>()
+
+      if ((freshCash?.cash ?? 0) >= bribeCost) {
+        await c.env.PROHIBITIONDB.prepare(
+          `UPDATE game_players SET cash = cash - ? WHERE id = ?`
+        ).bind(bribeCost, playerRow.id).run()
+        await c.env.PROHIBITIONDB.prepare(
+          `UPDATE game_cities SET bribe_player_id = ?, bribe_expires_season = ? WHERE id = ?`
+        ).bind(playerRow.id, playerRow.current_season + duration, playerRow.current_city_id).run()
+        await updateCumulativeProgress(c.env.PROHIBITIONDB, playerRow.id, { type: 'official_bribed' })
+      }
     }
   }
 
