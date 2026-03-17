@@ -1,4 +1,5 @@
 import type { Env } from '../index'
+import { buildGraph, generateRoads } from '../game/mapEngine'
 import { initMissionDeck, dealInitialMissions } from '../game/missions'
 
 const STARTING_CASH = 200
@@ -98,6 +99,38 @@ export class GameService {
       ).bind(gameId, city.id).run()
     }
 
+    // Fetch the inserted city rows so we can generate roads with real IDs
+    const { results: gameCities } = await this.env.PROHIBITIONDB.prepare(
+      `SELECT gc.id, cp.name, cp.region, cp.primary_alcohol, cp.population_tier, cp.is_coastal,
+              gc.demand_index, cp.lat, cp.lon
+       FROM game_cities gc JOIN city_pool cp ON gc.city_pool_id = cp.id
+       WHERE gc.game_id = ?`
+    ).bind(gameId).all<{
+      id: number; name: string; region: string;
+      primary_alcohol: string; population_tier: string; is_coastal: number; demand_index: number
+      lat: number; lon: number
+    }>()
+
+    // Build CityNode list using game_city IDs (not pool IDs)
+    const cityNodes = gameCities.map(c => ({
+      id:             c.id,
+      name:           c.name,
+      region:         c.region,
+      primaryAlcohol: c.primary_alcohol,
+      demandIndex:    c.demand_index,
+      isCoastal:      c.is_coastal === 1,
+      populationTier: c.population_tier as 'small' | 'medium' | 'large' | 'major',
+      lat:            c.lat,
+      lon:            c.lon
+    }))
+
+    const roads = generateRoads(cityNodes)
+    for (const road of roads) {
+      await this.env.PROHIBITIONDB.prepare(
+        `INSERT INTO roads (game_id, from_city_id, to_city_id, distance_value) VALUES (?, ?, ?, ?)`
+      ).bind(gameId, road.fromCityId, road.toCityId, road.distanceValue).run()
+    }
+
     // Backfill empty slots with NPCs
     const { results: players } = await this.env.PROHIBITIONDB.prepare(
       `SELECT id, turn_order FROM game_players WHERE game_id = ?`
@@ -110,6 +143,19 @@ export class GameService {
       ).bind(gameId, i, STARTING_CASH, 0, STARTING_ADJUSTMENT_CARDS).run()
     }
 
+    // Assign home bases — spread players across cities
+    const allPlayers = await this.env.PROHIBITIONDB.prepare(
+      `SELECT id FROM game_players WHERE game_id = ? ORDER BY turn_order`
+    ).bind(gameId).all<{ id: number }>()
+
+    for (let i = 0; i < allPlayers.results.length; i++) {
+      const cityId = cityNodes[i % cityNodes.length].id
+      await this.env.PROHIBITIONDB.prepare(
+        `UPDATE game_players SET home_city_id = ?, current_city_id = ? WHERE id = ?`
+      ).bind(cityId, cityId, allPlayers.results[i].id).run()
+    }
+
+    // Set deadline for first turn
     // Initialize mission deck and deal 2 cards to each human player
     await initMissionDeck(this.env.PROHIBITIONDB, gameId)
     const { results: humanPlayers } = await this.env.PROHIBITIONDB.prepare(
