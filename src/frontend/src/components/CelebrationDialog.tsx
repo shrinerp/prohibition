@@ -76,6 +76,7 @@ export default function CelebrationDialog({ celebration, cityName, onClose }: Ce
     subtext = missionCard
       ? `"${missionCard.title}" — $${(celebration.reward ?? 0).toLocaleString()} collected.`
       : `$${(celebration.reward ?? 0).toLocaleString()} reward collected.`
+    imageSrc = ''
     glowColor = 'rgba(168,85,247,0.4)'
     borderColor = 'border-purple-500'
   }
@@ -126,6 +127,11 @@ export default function CelebrationDialog({ celebration, cityName, onClose }: Ce
               style={{ filter: 'sepia(0.25) contrast(1.1) brightness(0.9)' }}
               onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
             />
+          )}
+          {celebration.type === 'mission_complete' && (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <span className="text-8xl drop-shadow-2xl" style={{ filter: 'drop-shadow(0 0 20px rgba(168,85,247,0.8))' }}>🏆</span>
+            </div>
           )}
           {/* Bottom gradient overlay */}
           <div className="absolute inset-0 bg-gradient-to-t from-stone-900/90 via-stone-900/20 to-transparent" />

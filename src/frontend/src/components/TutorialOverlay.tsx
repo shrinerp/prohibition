@@ -1,36 +1,48 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect } from 'react'
 
 interface Step {
   target: string   // data-tutorial attribute
   title: string
   body: string
-  side: 'right' | 'left' | 'center'
+  side: 'right' | 'left' | 'below' | 'center'
 }
 
 const STEPS: Step[] = [
   {
-    target: 'distillery',
-    title: '⚗ Your Distillery',
-    body: 'Every season your still brews alcohol automatically. How much depends on its tier — upgrade it to produce more. Collect your stock and load it into your vehicle.',
-    side: 'right',
+    target: 'roll_button',
+    title: '🎲 Roll the Dice',
+    body: 'The game is turn-based, click this button to advance your turn. You assign your car the next city that you want to goto.',
+    side: 'left',
   },
   {
     target: 'map',
     title: '🗺 Move Your Fleet',
     body: 'Tap any city on the map to route a vehicle there. You roll dice each turn — the result becomes movement points you spend across your vehicles.',
-    side: 'center',
+    side: 'below',
   },
   {
-    target: 'actions',
-    title: '💰 Buy Low, Sell High',
-    body: 'Every city overproduces one alcohol type — prices are low there. Drive your cargo to a different city and sell high. That\'s how you build an empire.',
+    target: 'market',
+    title: '🏪 The Market',
+    body: 'Buy and sell alcohol. Prices vary by location — find the best deals to maximize your profits. Alcohol made in the city will always be the cheapest.',
+    side: 'left',
+  },  
+  {
+    target: 'upgrade_still',
+    title: '⚗ Upgrade Your Still',
+    body: 'Upgrade your still to produce more alcohol. Higher tiers yield better profits.',
+    side: 'left',
+  },  
+  {
+    target: 'inventory',
+    title: '🎒 Inventory',
+    body: 'See your current stock of alcohol and your vehicles\' cargo. Add Vehicle to increase your trading capacity.',
     side: 'left',
   },
   {
     target: 'heat',
     title: '🌡 Watch Your Heat',
     body: 'Every illegal act raises your heat level. Hit 100 and you\'re arrested and jailed for seasons. Bribe city officials before your heat gets out of control.',
-    side: 'right',
+    side: 'left',
   },
 ]
 
@@ -46,17 +58,28 @@ interface Props {
 export default function TutorialOverlay({ gameId, onDone }: Props) {
   const [step, setStep] = useState(0)
   const [spotlight, setSpotlight] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
-  const [tooltipPos, setTooltipPos] = useState<{ left: number; top: number }>({ left: 0, top: 0 })
+  const [tooltipPos, setTooltipPos] = useState<{ left: number; top: number } | null>(null)
+  const [isMobile, setIsMobile] = useState(false)
 
   const current = STEPS[step]
 
   useEffect(() => {
+    setIsMobile(window.innerWidth < 640)
+  }, [])
+
+  useEffect(() => {
     const el = document.querySelector<HTMLElement>(`[data-tutorial="${current.target}"]`)
-    if (!el) { setSpotlight(null); return }
+    if (!el) { setSpotlight(null); setTooltipPos(null); return }
 
     const r = el.getBoundingClientRect()
     const s = { left: r.left - 6, top: r.top - 6, width: r.width + 12, height: r.height + 12 }
     setSpotlight(s)
+
+    if (window.innerWidth < 640) {
+      // Mobile: tooltip anchored to bottom — no floating position needed
+      setTooltipPos(null)
+      return
+    }
 
     const vw = window.innerWidth
     const vh = window.innerHeight
@@ -69,6 +92,9 @@ export default function TutorialOverlay({ gameId, onDone }: Props) {
     } else if (current.side === 'left') {
       left = s.left - TOOLTIP_W - PAD
       top  = s.top + s.height / 2 - TOOLTIP_H / 2
+    } else if (current.side === 'below') {
+      left = s.left + s.width / 2 - TOOLTIP_W / 2
+      top  = s.top + s.height + PAD
     } else {
       // center — overlay tooltip on the spotlight
       left = s.left + s.width / 2 - TOOLTIP_W / 2
@@ -118,18 +144,26 @@ export default function TutorialOverlay({ gameId, onDone }: Props) {
         <div className="fixed inset-0 bg-black/80" style={{ zIndex: 9991 }} />
       )}
 
-      {/* Tooltip card */}
+      {/* Tooltip card — anchored to bottom on mobile, floating on desktop */}
       <div
-        className="fixed bg-stone-800 border border-amber-500 rounded-xl shadow-2xl pointer-events-auto"
-        style={{ left: tooltipPos.left, top: tooltipPos.top, width: TOOLTIP_W, zIndex: 9995 }}
+        className={`fixed bg-stone-800 border border-amber-500 shadow-2xl pointer-events-auto ${
+          isMobile
+            ? 'inset-x-0 bottom-0 rounded-t-2xl'
+            : 'rounded-xl'
+        }`}
+        style={
+          isMobile
+            ? { zIndex: 9995 }
+            : { left: tooltipPos?.left ?? 8, top: tooltipPos?.top ?? 8, width: TOOLTIP_W, zIndex: 9995 }
+        }
       >
-        <div className="p-4">
-          <p className="text-amber-400 font-bold text-sm mb-1.5">{current.title}</p>
-          <p className="text-stone-300 text-xs leading-relaxed">{current.body}</p>
+        <div className={isMobile ? 'px-5 pt-5 pb-2' : 'p-4'}>
+          <p className={`text-amber-400 font-bold mb-1.5 ${isMobile ? 'text-base' : 'text-sm'}`}>{current.title}</p>
+          <p className={`text-stone-300 leading-relaxed ${isMobile ? 'text-sm' : 'text-xs'}`}>{current.body}</p>
         </div>
 
         {/* Progress dots */}
-        <div className="flex justify-center gap-1.5 pb-2">
+        <div className="flex justify-center gap-1.5 pb-2 pt-1">
           {STEPS.map((_, i) => (
             <div
               key={i}
@@ -140,16 +174,16 @@ export default function TutorialOverlay({ gameId, onDone }: Props) {
           ))}
         </div>
 
-        <div className="flex items-center justify-between px-4 pb-4 gap-2">
+        <div className={`flex items-center justify-between gap-2 ${isMobile ? 'px-5 pb-8' : 'px-4 pb-4'}`}>
           <button
             onClick={finish}
-            className="text-xs text-stone-500 hover:text-stone-400 transition"
+            className={`text-stone-500 hover:text-stone-400 transition ${isMobile ? 'text-sm' : 'text-xs'}`}
           >
             Skip
           </button>
           <button
             onClick={next}
-            className="px-4 py-1.5 bg-amber-600 hover:bg-amber-500 text-stone-900 text-xs font-bold rounded-lg uppercase tracking-wide transition"
+            className={`bg-amber-600 hover:bg-amber-500 text-stone-900 font-bold rounded-lg uppercase tracking-wide transition ${isMobile ? 'px-6 py-2.5 text-sm' : 'px-4 py-1.5 text-xs'}`}
           >
             {step < STEPS.length - 1 ? 'Next →' : "Let's go!"}
           </button>

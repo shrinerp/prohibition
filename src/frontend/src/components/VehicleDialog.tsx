@@ -28,6 +28,7 @@ interface VehicleDialogProps {
   cash: number
   isMyTurn: boolean
   mapCities: MapCity[]
+  vehiclePrices: Record<string, number>
   onBuy: (vehicleType: string) => void
   onClose: () => void
 }
@@ -54,7 +55,7 @@ function CargoBar({ slots }: { slots: number }) {
   )
 }
 
-export default function VehicleDialog({ vehicles, cash, isMyTurn, mapCities, onBuy, onClose }: VehicleDialogProps) {
+export default function VehicleDialog({ vehicles, cash, isMyTurn, mapCities, vehiclePrices, onBuy, onClose }: VehicleDialogProps) {
   const [tab, setTab] = useState<'fleet' | 'buy'>('fleet')
 
   return (
@@ -142,7 +143,8 @@ export default function VehicleDialog({ vehicles, cash, isMyTurn, mapCities, onB
             <div className="space-y-3">
               <p className="text-xs text-stone-500 mb-3">New car spawns at your home city. Each car adds +1 die to your movement roll.</p>
               {VEHICLES.map(v => {
-                const canAfford = isMyTurn && cash >= v.price
+                const price = vehiclePrices[v.id] ?? v.price
+                const canAfford = isMyTurn && cash >= price
                 return (
                   <div key={v.id} className="rounded border border-stone-700 bg-stone-800 overflow-hidden">
                     <div className="relative h-28 bg-stone-950 flex items-end justify-center px-4">
@@ -173,7 +175,7 @@ export default function VehicleDialog({ vehicles, cash, isMyTurn, mapCities, onB
                           onClick={() => { onBuy(v.id); onClose() }}
                           className="px-3 py-1.5 bg-blue-900 hover:bg-blue-800 disabled:opacity-40 text-blue-200 text-xs font-bold rounded transition"
                         >
-                          ${v.price.toLocaleString()}
+                          ${price.toLocaleString()}
                         </button>
                       </div>
                     </div>

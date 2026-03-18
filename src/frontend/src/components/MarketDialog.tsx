@@ -40,12 +40,6 @@ export default function MarketDialog({
   cash, cargoFree, currentCityId, onClose, onAction
 }: MarketDialogProps) {
   const [tab, setTab] = useState<'buy' | 'sell'>('buy')
-  const [buyQty, setBuyQty] = useState<Record<string, number>>({})
-
-  function qty(type: string) { return buyQty[type] ?? 1 }
-  function setQty(type: string, n: number) {
-    setBuyQty(prev => ({ ...prev, [type]: Math.max(1, n) }))
-  }
 
   const sortedPrices = [...prices].sort((a, b) => b.price - a.price)
   const maxPrice     = sortedPrices[0]?.price ?? 1
@@ -164,14 +158,12 @@ export default function MarketDialog({
                     <tr className="text-stone-500 uppercase tracking-wider border-b border-stone-700">
                       <th className="text-left pb-1 font-normal">Alcohol</th>
                       <th className="text-right pb-1 font-normal">Price</th>
-                      <th className="text-right pb-1 font-normal">Qty</th>
                       <th className="text-right pb-1 font-normal">Buy</th>
                     </tr>
                   </thead>
                   <tbody>
                     {sortedPrices.map(p => {
                       const isLocal   = p.primaryAlcohol === p.alcoholType
-                      const q         = qty(p.alcoholType)
                       const maxAfford = Math.floor(cash / p.price)
                       const maxBuy    = Math.min(cargoFree, maxAfford)
                       return (
@@ -183,22 +175,13 @@ export default function MarketDialog({
                           <td className={`text-right font-bold tabular-nums ${priceColor(p.price, isLocal)}`}>
                             ${p.price}
                           </td>
-                          <td className="text-right">
-                            <div className="flex items-center justify-end gap-0.5">
-                              <button onClick={() => setQty(p.alcoholType, q - 1)} disabled={q <= 1}
-                                className="w-5 h-5 bg-stone-700 hover:bg-stone-600 rounded disabled:opacity-30">−</button>
-                              <span className="w-5 text-center text-stone-300">{q}</span>
-                              <button onClick={() => setQty(p.alcoholType, q + 1)} disabled={q >= maxBuy}
-                                className="w-5 h-5 bg-stone-700 hover:bg-stone-600 rounded disabled:opacity-30">+</button>
-                            </div>
-                          </td>
                           <td className="text-right pl-2">
                             <button
                               disabled={maxBuy <= 0}
-                              onClick={() => onAction([{ type: 'buy', alcoholType: p.alcoholType, quantity: q }])}
+                              onClick={() => onAction([{ type: 'buy', alcoholType: p.alcoholType, quantity: maxBuy }])}
                               className="px-2 py-1 bg-blue-900 hover:bg-blue-800 disabled:opacity-40 text-blue-200 rounded transition tabular-nums"
                             >
-                              ${p.price * q}
+                              {maxBuy > 0 ? `Max ×${maxBuy} — $${(p.price * maxBuy).toLocaleString()}` : 'Max'}
                             </button>
                           </td>
                         </tr>

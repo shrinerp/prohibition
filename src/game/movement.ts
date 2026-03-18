@@ -8,7 +8,7 @@ export interface Vehicle {
 }
 
 export const VEHICLE_PRICES: Record<string, number> = {
-  workhorse:      200,
+  workhorse:      300,
   roadster:       500,
   truck:          700,
   whiskey_runner: 900,

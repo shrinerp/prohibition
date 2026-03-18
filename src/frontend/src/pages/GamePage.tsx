@@ -19,8 +19,10 @@ import DrinkDialog from '../components/DrinkDialog'
 import TrapDialog from '../components/TrapDialog'
 import AlliancePanel from '../components/AlliancePanel'
 import TutorialOverlay from '../components/TutorialOverlay'
+import WelcomeDialog   from '../components/WelcomeDialog'
 import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch'
-import MissionPanel   from '../components/MissionPanel'
+import MissionPanel      from '../components/MissionPanel'
+import DrawnCardDialog  from '../components/DrawnCardDialog'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const ALCOHOL_EMOJI: Record<string, string> = {
@@ -48,7 +50,7 @@ interface PlayerInfo {
 }
 
 interface VehicleState {
-  id: number; vehicleType: string; cityId: number; heat: number
+  id: number; vehicleType: string; cityId: number; heat: number; cargoSlots?: number
   inventory: Array<{ alcohol_type: string; quantity: number }>
 }
 
@@ -75,7 +77,10 @@ interface FullState {
     bribedCityIds: number[]
     distilleries: Array<{ id: number; cityId: number; tier: number; primaryAlcohol: string; cityName: string }>
     missions: Array<{ id: number; cardId: number; progress: Record<string, unknown>; assignedSeason: number }>
+    totalCashEarned: number
+    consecutiveCleanSeasons: number
   }
+  vehiclePrices: Record<string, number>
   players: PlayerInfo[]
   alliances: Array<{
     id: number; status: 'pending' | 'active'; formedSeason: number | null
@@ -90,6 +95,19 @@ interface MapCity {
 }
 
 const BASE_CLAIM_COST: Record<string, number> = { small: 500, medium: 1000, large: 1500, major: 2500 }
+
+const CHARACTER_DISPLAY: Record<string, { name: string; perk: string; drawback: string }> = {
+  priest_nun:   { name: 'The Priest / Nun',             perk: '-25% Heat generation · 2× heat decay',         drawback: '-20% Cargo capacity' },
+  hillbilly:    { name: 'The Hillbilly',                 perk: '-20% Distillery upgrade costs',                drawback: '-10% Movement roll' },
+  gangster:     { name: 'The Gangster',                  perk: 'Claim cities 25% cheaper',                     drawback: '+20% Heat generation' },
+  vixen:        { name: 'The Vixen',                     perk: 'Bribes last 6 seasons',                        drawback: '-10% Production volume' },
+  pharmacist:   { name: 'The Pharmacist',                perk: 'Whiskey sells at +50% (medicinal prescription)', drawback: 'Takeover costs +25%' },
+  jazz_singer:  { name: 'The Jazz Singer',               perk: 'Passive income in large/major cities',         drawback: '+15% Heat generation' },
+  bootlegger:   { name: 'The Bootlegger (Clyde)',        perk: 'All dice rolls +2 bonus',                      drawback: '+20% Heat generation' },
+  socialite:    { name: 'The Socialite (Eleanor)',       perk: '+25% sell price everywhere',                   drawback: '-20% Alcohol production' },
+  union_leader: { name: 'The Union Leader (Big Mike)',   perk: '+20% production from all stills',              drawback: 'Takeovers cost +20%' },
+  rum_runner:   { name: 'The Rum-Runner (Capt. Morgan)', perk: 'Coastal cities produce 2×',                   drawback: '-15% Sell price everywhere' },
+}
 interface MapRoad  { from_city_id: number; to_city_id: number; distance_value: number }
 
 // Apply character-class modifier to raw dice roll (mirrors server applyMovementModifier)
@@ -304,6 +322,10 @@ export default function GamePage() {
   const [showYourTurnDialog, setShowYourTurnDialog] = useState(false)
   const prevIsMyTurnRef = useRef<number | null>(null)
   const [missionsOpen, setMissionsOpen] = useState(false)
+  const [drawnCardId,  setDrawnCardId]  = useState<number | null>(null)
+  const missionIdsBeforeDrawRef = useRef<Set<number> | null>(null)
+  const [welcomeOpen, setWelcomeOpen] = useState(false)
+  const [tutorialOpen, setTutorialOpen] = useState(false)
 
   const fetchAll = useCallback(async () => {
     if (!gameId) return
@@ -327,7 +349,13 @@ export default function GamePage() {
           nav(`/games/${gameId}/end`)
           return
         }
-        setFullState(stateData.data)
+        setFullState(prev => {
+          // Show welcome dialog the first time we see tutorialSeen = false
+          if (!prev && !stateData.data?.player?.tutorialSeen) {
+            setWelcomeOpen(true)
+          }
+          return stateData.data
+        })
       }
       if (mapData.success) {
         setMapCities(mapData.data.cities ?? [])
@@ -388,8 +416,9 @@ export default function GamePage() {
   }
 
   // ── Derived ────────────────────────────────────────────────────────────────
-  const player  = fullState?.player
-  const game    = fullState?.game
+  const player        = fullState?.player
+  const game          = fullState?.game
+  const vehiclePrices = fullState?.vehiclePrices ?? {}
   // serverIsMyTurn reflects actual server state, unaffected by optimistic turnPending
   const serverIsMyTurn = player !== undefined && game !== undefined && player.turnOrder === game.currentPlayerIndex
   const isMyTurn = !turnPending && serverIsMyTurn
@@ -409,6 +438,17 @@ export default function GamePage() {
       setShowYourTurnDialog(true)
     }
   }, [game?.currentPlayerIndex, player?.turnOrder])
+
+  // Detect newly drawn mission card and show reveal dialog
+  useEffect(() => {
+    const before = missionIdsBeforeDrawRef.current
+    if (!before) return
+    const newMission = (player?.missions ?? []).find(m => !before.has(m.id))
+    if (newMission) {
+      missionIdsBeforeDrawRef.current = null
+      setDrawnCardId(newMission.cardId)
+    }
+  }, [player?.missions])
 
   // Also show the dialog when a trap notification arrives mid-turn
   const prevPendingTrapRef = useRef<unknown>(null)
@@ -454,8 +494,7 @@ export default function GamePage() {
   const currentCityStock = canPickUpHere
     ? cityInventory.filter(r => r.city_id === player?.currentCityId && r.quantity > 0)
     : []
-  const CARGO_SLOTS: Record<string, number> = { workhorse: 16, roadster: 10, truck: 28, whiskey_runner: 6 }
-  const cargoCapacity = (player?.vehicles ?? []).reduce((s, v) => s + (CARGO_SLOTS[v.vehicleType] ?? 16), 0)
+  const cargoCapacity = (player?.vehicles ?? []).reduce((s, v) => s + (v.cargoSlots ?? 16), 0)
   const cargoFree = cargoCapacity - cargoUsed
 
   // Market prices at current city, sorted highest first
@@ -713,18 +752,7 @@ export default function GamePage() {
 
   // ── Lobby screen ───────────────────────────────────────────────────────────
   if (game?.status === 'lobby') {
-    const CHARACTERS = [
-      { id: 'priest_nun',   name: 'The Priest / Nun',           perk: '-25% Heat generation',          drawback: '-20% Cargo capacity' },
-      { id: 'hillbilly',    name: 'The Hillbilly',               perk: '-20% Distillery upgrade costs', drawback: '-10% Movement roll' },
-      { id: 'gangster',     name: 'The Gangster',                perk: '+15% Double Cross success',     drawback: '+20% Heat in owned cities' },
-      { id: 'vixen',        name: 'The Vixen',                   perk: 'Bribes last 6 seasons',         drawback: '-10% Production volume' },
-      { id: 'pharmacist',   name: 'The Pharmacist',              perk: 'Medicinal Spirits at 1.5×',     drawback: 'Takeover costs +25%' },
-      { id: 'jazz_singer',  name: 'The Jazz Singer',             perk: 'Passive income in big cities',  drawback: 'Higher robbery losses' },
-      { id: 'bootlegger',   name: 'The Bootlegger (Clyde)',      perk: 'All dice rolls +2 bonus',       drawback: 'None' },
-      { id: 'socialite',    name: 'The Socialite (Eleanor)',     perk: '+15% sell price everywhere',    drawback: 'None' },
-      { id: 'union_leader', name: 'The Union Leader (Big Mike)', perk: '+20% Double Cross in big cities', drawback: 'None' },
-      { id: 'rum_runner',   name: 'The Rum-Runner (Capt. Morgan)', perk: 'Coastal cities produce 2×',  drawback: 'None' },
-    ]
+    const CHARACTERS = Object.entries(CHARACTER_DISPLAY).map(([id, c]) => ({ id, ...c }))
     const myClass = player?.characterClass ?? 'unselected'
     const takenClasses = new Set((fullState?.players ?? []).filter(p => p.id !== player?.id).map(p => p.characterClass))
 
@@ -1050,20 +1078,37 @@ export default function GamePage() {
                 const imgSrc = isInJail
                   ? `/jail/${charId ?? 'gangster'}.png`
                   : `/characters/${charId ?? 'gangster'}.png`
-                const label = charId ? charId.replace(/_/g, ' ') : 'Unknown'
+                const charDisplay = charId ? CHARACTER_DISPLAY[charId] : null
+                const label = charDisplay?.name ?? (charId ? charId.replace(/_/g, ' ') : 'Unknown')
                 return (
-                  <div className="relative rounded overflow-hidden bg-stone-800 border border-stone-600" style={{ height: 140 }}>
-                    <img
-                      src={imgSrc}
-                      className="w-full h-full object-cover object-top"
-                      style={{ filter: 'sepia(0.3) contrast(1.05) brightness(0.9)' }}
-                    />
-                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 py-1.5">
-                      <p className="text-amber-300 text-xs font-bold capitalize leading-tight">{label}</p>
-                      {isInJail && <p className="text-red-400 text-xs leading-tight">Behind Bars · {jailSeasonsLeft} season{jailSeasonsLeft !== 1 ? 's' : ''}</p>}
+                  <div>
+                    <div className="relative rounded overflow-hidden bg-stone-800 border border-stone-600" style={{ height: 140 }}>
+                      <img
+                        src={imgSrc}
+                        className="w-full h-full object-cover object-top"
+                        style={{ filter: 'sepia(0.3) contrast(1.05) brightness(0.9)' }}
+                      />
+                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 py-1.5">
+                        <p className="text-amber-300 text-xs font-bold leading-tight">{label}</p>
+                        {isInJail && <p className="text-red-400 text-xs leading-tight">Behind Bars · {jailSeasonsLeft} season{jailSeasonsLeft !== 1 ? 's' : ''}</p>}
+                      </div>
+                      {isInJail && (
+                        <div className="absolute top-1.5 right-1.5 text-xs text-red-300 bg-red-900/80 px-1.5 py-0.5 rounded font-bold uppercase tracking-wide">Jailed</div>
+                      )}
                     </div>
-                    {isInJail && (
-                      <div className="absolute top-1.5 right-1.5 text-xs text-red-300 bg-red-900/80 px-1.5 py-0.5 rounded font-bold uppercase tracking-wide">Jailed</div>
+                    {charDisplay && (
+                      <div className="mt-1.5 space-y-0.5">
+                        <div className="flex items-start gap-1 text-xs">
+                          <span className="text-green-500 font-bold flex-shrink-0">+</span>
+                          <span className="text-green-400">{charDisplay.perk}</span>
+                        </div>
+                        {charDisplay.drawback !== 'None' && (
+                          <div className="flex items-start gap-1 text-xs">
+                            <span className="text-red-500 font-bold flex-shrink-0">−</span>
+                            <span className="text-red-400">{charDisplay.drawback}</span>
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
                 )
@@ -1143,13 +1188,15 @@ export default function GamePage() {
               )}
 
               <InventoryPanel
+                data-tutorial="inventory"
                 items={inventoryItems}
                 cargoCapacity={cargoCapacity}
                 cargoUsed={cargoUsed}
-                vehicles={(player?.vehicles ?? []).map(v => ({
+                vehicles={(player?.vehicles ?? []).map((v, i) => ({
                   id: v.id,
                   vehicleType: v.vehicleType,
                   cityName: mapCities.find(c => c.id === v.cityId)?.name ?? `City ${v.cityId}`,
+                  isLead: i === 0,
                 }))}
                 onManageFleet={() => setVehiclesOpen(true)}
               />
@@ -1166,6 +1213,7 @@ export default function GamePage() {
                 </div>
                 <p className="text-2xl font-bold text-green-400">${(player?.cash ?? 0).toLocaleString()}</p>
               </div>
+
             </div>
           )}
         </div>
@@ -1208,6 +1256,11 @@ export default function GamePage() {
               if (hasDrinks || hasTrap) dismissDrinks()
             }}
           />
+        )}
+
+        {/* Drawn mission card reveal */}
+        {drawnCardId != null && (
+          <DrawnCardDialog cardId={drawnCardId} onClose={() => setDrawnCardId(null)} />
         )}
 
         {/* Celebration dialog */}
@@ -1312,6 +1365,7 @@ export default function GamePage() {
             cash={player?.cash ?? 0}
             isMyTurn={isMyTurn}
             mapCities={mapCities}
+            vehiclePrices={vehiclePrices}
             onBuy={(vehicleType) => submitTurn([{ type: 'buy_vehicle', vehicleId: vehicleType }])}
             onClose={() => setVehiclesOpen(false)}
           />
@@ -1322,7 +1376,7 @@ export default function GamePage() {
           const vehiclesAtCity = (player?.vehicles ?? []).filter(v => v.cityId === viewCityId)
           // Combined capacity across all vehicles at this city
           const marketCargoUsed = vehiclesAtCity.reduce((s, v) => s + v.inventory.reduce((vs, i) => vs + i.quantity, 0), 0)
-          const marketCargoFree = vehiclesAtCity.reduce((s, v) => s + (CARGO_SLOTS[v.vehicleType] ?? 16), 0) - marketCargoUsed
+          const marketCargoFree = vehiclesAtCity.reduce((s, v) => s + (v.cargoSlots ?? 16), 0) - marketCargoUsed
           // Aggregate inventory across all vehicles at this city
           const invMap = new Map<string, number>()
           for (const v of vehiclesAtCity) {
@@ -1385,6 +1439,18 @@ export default function GamePage() {
 
         {/* Map area */}
         <div data-tutorial="map" className="relative flex-1 min-w-0 overflow-hidden bg-stone-950">
+          {/* Missions button — top-right of map pane */}
+          <button
+            onClick={() => setMissionsOpen(true)}
+            className="absolute top-2 right-2 z-10 flex items-center gap-1.5 px-3 py-1.5 bg-stone-900/80 backdrop-blur-sm border border-purple-700 hover:bg-purple-900/50 text-purple-400 font-bold rounded uppercase tracking-wide text-xs transition"
+          >
+            📜 Missions
+            {(player?.missions?.length ?? 0) > 0 && (
+              <span className="bg-purple-700 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-black leading-none">
+                {player?.missions?.length}
+              </span>
+            )}
+          </button>
           {turnPending && (
             <div className="absolute inset-0 z-30 bg-black/40 flex items-center justify-center pointer-events-all cursor-wait" />
           )}
@@ -1468,7 +1534,7 @@ export default function GamePage() {
             onClick={() => setRightOpen(o => !o)}
             className="absolute top-1/2 -translate-y-1/2 -left-3 z-20 w-6 h-12 flex items-center justify-center bg-stone-700 hover:bg-amber-700 border border-stone-600 hover:border-amber-500 rounded-l text-stone-300 hover:text-white text-sm font-bold transition shadow-md"
           >{rightOpen ? '›' : '‹'}</button>
-        {rightOpen && <div data-tutorial="actions" className="p-3 pt-7 space-y-2 overflow-y-auto flex-1">
+        {rightOpen && <div className="p-3 pt-7 space-y-2 overflow-y-auto flex-1">
           {/* City info / fleet move panel */}
           {moveMode && !turnPending ? (
             <div className="space-y-2">
@@ -1623,15 +1689,24 @@ export default function GamePage() {
                   {/* Fleet location summary */}
                   {(player?.vehicles ?? []).length > 0 && (
                     <div className="text-xs space-y-0.5">
-                      {(player?.vehicles ?? []).map(v => (
-                        <div key={v.id} className="flex items-center justify-between text-stone-500">
-                          <span className="capitalize">{v.vehicleType.replace(/_/g, ' ')}</span>
-                          <span className="text-stone-400">📍 {mapCities.find(c => c.id === v.cityId)?.name ?? `City ${v.cityId}`}</span>
-                        </div>
-                      ))}
+                      {(player?.vehicles ?? []).map(v => {
+                        const cityName = mapCities.find(c => c.id === v.cityId)?.name ?? `City ${v.cityId}`
+                        return (
+                          <div key={v.id} className="flex items-center justify-between text-stone-500">
+                            <span className="capitalize">{v.vehicleType.replace(/_/g, ' ')}</span>
+                            <button
+                              onClick={() => setViewCityId(v.cityId)}
+                              className="text-stone-400 hover:text-amber-300 transition"
+                            >
+                              📍 {cityName}
+                            </button>
+                          </div>
+                        )
+                      })}
                     </div>
                   )}
                   <button
+                    data-tutorial="roll_button"
                     onClick={rollToMove}
                     disabled={
                       player?.stuckUntilSeason != null &&
@@ -1651,6 +1726,7 @@ export default function GamePage() {
                       : '🎲 Roll to Move'}
                   </button>
                   <button
+                    data-tutorial="market"
                     onClick={() => setMarketOpen(true)}
                     disabled={viewCityId == null || !(player?.vehicles ?? []).some(v => v.cityId === viewCityId)}
                     className="w-full py-2 border border-amber-600 hover:bg-amber-900 disabled:opacity-40 disabled:cursor-not-allowed text-amber-400 font-bold rounded uppercase tracking-wide text-sm transition"
@@ -1680,6 +1756,7 @@ export default function GamePage() {
                     }
                     return (
                       <button
+                        data-tutorial="upgrade_still"
                         onClick={() => setStillOpen(true)}
                         disabled={!isOwnStill}
                         className="w-full py-2 border border-stone-600 hover:bg-stone-700 disabled:opacity-40 disabled:cursor-not-allowed text-stone-300 font-bold rounded uppercase tracking-wide text-sm transition"
@@ -1710,17 +1787,6 @@ export default function GamePage() {
                   })()}
                   <hr className="border-stone-700" />
                   <button
-                    onClick={() => setMissionsOpen(true)}
-                    className="w-full py-2 border border-purple-700 hover:bg-purple-900/40 text-purple-400 font-bold rounded uppercase tracking-wide text-sm transition flex items-center justify-center gap-1"
-                  >
-                    Missions
-                    {(player?.missions?.length ?? 0) > 0 && (
-                      <span className="bg-purple-700 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-black">
-                        {player?.missions?.length}
-                      </span>
-                    )}
-                  </button>
-                  <button
                     onClick={() => submitTurn([{ type: 'skip' }])}
                     className="w-full py-2 text-stone-500 hover:text-stone-300 text-xs uppercase tracking-wide transition"
                   >
@@ -1750,21 +1816,6 @@ export default function GamePage() {
             <p className="text-stone-500 text-sm italic">Waiting for {currentPlayerName}</p>
           )}
 
-          {/* Missions button (always visible) */}
-          <div className="pt-2 border-t border-stone-700">
-            <button
-              onClick={() => setMissionsOpen(true)}
-              className="w-full py-1.5 border border-purple-800 hover:bg-purple-900/30 text-purple-500 rounded uppercase tracking-wide text-xs transition flex items-center justify-center gap-1"
-            >
-              View Missions
-              {(player?.missions?.length ?? 0) > 0 && (
-                <span className="bg-purple-700 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-black">
-                  {player?.missions?.length}
-                </span>
-              )}
-            </button>
-          </div>
-
           {/* Player list */}
           {fullState && (
             <div className="pt-2 border-t border-stone-700 space-y-1">
@@ -1785,11 +1836,23 @@ export default function GamePage() {
         </div>
       </div>
 
-      {/* First-turn tutorial — shown once when it's your first turn */}
-      {player && !player.tutorialSeen && isMyTurn && game?.status === 'active' && (
+      {/* Welcome dialog — first step of FTUX */}
+      {welcomeOpen && (
+        <WelcomeDialog
+          onBeginTour={() => { setWelcomeOpen(false); setTutorialOpen(true) }}
+          onSkip={async () => {
+            setWelcomeOpen(false)
+            await fetch(`/api/games/${gameId}/tutorial-done`, { method: 'POST' })
+            fetchAll()
+          }}
+        />
+      )}
+
+      {/* Tutorial spotlight steps — begins after welcome dialog */}
+      {tutorialOpen && gameId && (
         <TutorialOverlay
-          gameId={gameId!}
-          onDone={() => fetchAll()}
+          gameId={gameId}
+          onDone={() => { setTutorialOpen(false); fetchAll() }}
         />
       )}
       {/* Mission Panel overlay */}
@@ -1798,10 +1861,22 @@ export default function GamePage() {
           missions={player?.missions ?? []}
           onClose={() => setMissionsOpen(false)}
           onDrawCard={() => {
+            missionIdsBeforeDrawRef.current = new Set((player?.missions ?? []).map(m => m.id))
             setMissionsOpen(false)
             submitTurn([{ type: 'draw_mission' }])
           }}
           canDraw={isMyTurn && !isInJail && (player?.missions?.length ?? 0) < 3}
+          playerState={{
+            cash: player?.cash ?? 0,
+            heat: player?.heat ?? 0,
+            vehiclesOwned: (player?.vehicles ?? []).length,
+            maxDistilleryTier: Math.max(...[(player?.distilleries ?? []).map(d => d.tier), [1]].flat()),
+            totalCargoUnits: (player?.vehicles ?? []).reduce((s, v) => s + v.inventory.reduce((vs, i) => vs + i.quantity, 0), 0),
+            cargoByType: (player?.vehicles ?? []).reduce((acc, v) => { v.inventory.forEach(i => { acc[i.alcohol_type] = (acc[i.alcohol_type] ?? 0) + i.quantity }); return acc }, {} as Record<string, number>),
+            totalCashEarned: player?.totalCashEarned ?? 0,
+            consecutiveCleanSeasons: player?.consecutiveCleanSeasons ?? 0,
+            citiesOwned: (player?.distilleries ?? []).filter(d => d.cityId !== player?.homeCityId).length + (player?.homeCityId != null ? 1 : 0),
+          }}
         />
       )}
     </div>
