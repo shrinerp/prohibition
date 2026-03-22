@@ -174,7 +174,7 @@ export default function ChatPanel({ gameId, myTurnOrder, players, playerColors, 
 
   const availableDrinks = inventoryItems.filter(i => i.quantity > 0)
   const otherPlayers = players.filter(p => !p.isYou)
-  const canSendDrink = isMyTurn && availableDrinks.length > 0
+  const canSendDrink = availableDrinks.length > 0
 
   const inputBar = (
     <div className="border-t border-stone-700 flex-shrink-0">
@@ -198,7 +198,7 @@ export default function ChatPanel({ gameId, myTurnOrder, players, playerColors, 
         <button
           onClick={() => canSendDrink && setDrinkOpen(o => !o)}
           disabled={!canSendDrink}
-          title={!isMyTurn ? 'Not your turn' : availableDrinks.length === 0 ? 'No drinks in inventory' : 'Send a drink'}
+          title={availableDrinks.length === 0 ? 'No drinks in inventory' : 'Send a drink'}
           className="px-2 py-1 bg-stone-700 hover:bg-stone-600 disabled:opacity-30 text-base rounded transition flex-shrink-0"
         >
           🥃
