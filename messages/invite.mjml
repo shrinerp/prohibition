@@ -1,0 +1,109 @@
+<mj-section background-color="#ffffff" padding="5px" css-class="content-section">
+      <mj-column>
+        <mj-text 
+          font-size="14px"
+          text-align="left"
+          color="#000000"
+          line-height="1.6">
+          
+        {{hostName}} has invited you to play
+      
+        </mj-text>
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#ffffff" padding="5px" css-class="content-section">
+      <mj-column width="100%">
+        <mj-image 
+          src="https://images.3mails.ai/org/id_an6wp2x0s/1773188001099-x8c670irhw.png" 
+          alt="portland.png" 
+          width="1024px"
+          border="none"
+          padding="10px 0"
+          align="center"
+          container-background-color="#ffffff"
+          css-class="natural-image"
+        />
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#ffffff" padding="5px" css-class="content-section">
+      <mj-column>
+        <mj-text 
+          font-size="28px"
+          font-weight="bold"
+          text-align="left"
+          color="#000000"
+          line-height="1.2">
+          
+        {{gameName}}
+      
+        </mj-text>
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#ffffff" padding="5px" css-class="content-section">
+      <mj-column>
+        <mj-text 
+          font-size="13px"
+          text-align="left"
+          color="#000000"
+          line-height="1.6">
+          
+        Your invite code
+      
+        </mj-text>
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#ffffff" padding="5px" css-class="content-section">
+      <mj-column>
+        <mj-text 
+          font-size="42px"
+          text-align="left"
+          color="#000000"
+          line-height="1.6">
+          
+        {{inviteCode}}
+      
+        </mj-text>
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#ffffff" padding="5px" css-class="content-section">
+      <mj-column>
+        <mj-text 
+          font-size="12px"
+          text-align="left"
+          color="#000000"
+          line-height="1.6">
+          
+        Enter this code when joining the game
+      
+        </mj-text>
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#ffffff" padding="20px" css-class="content-section">
+      <mj-column>
+        <mj-button 
+          href="{{joinUrl}}" 
+          background-color="#1976D2"
+          color="#ffffff"
+          font-size="16px"
+          font-weight="bold"
+          border-radius="4px"
+          padding="12px 24px"
+          css-class="button"
+        >
+          Join Game
+        </mj-button>
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#ffffff" padding="5px" css-class="content-section">
+      <mj-column>
+        <mj-text 
+          font-size="12px"
+          text-align="left"
+          color="#000000"
+          line-height="1.6">
+          
+        Or copy this link: {{joinUrl}}
+      
+        </mj-text>
+      </mj-column>
+    </mj-section>

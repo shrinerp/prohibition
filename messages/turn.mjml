@@ -1,0 +1,53 @@
+<mj-section background-color="#ffffff" padding="5px" css-class="content-section">
+      <mj-column>
+        <mj-text 
+          font-size="32px"
+          font-weight="bold"
+          text-align="left"
+          color="#000000"
+          line-height="1.2">
+          ITS YOUR TURN
+        </mj-text>
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#ffffff" padding="5px" css-class="content-section">
+      <mj-column>
+        <mj-text 
+          font-size="16px"
+          text-align="left"
+          color="#000000"
+          line-height="1.6">
+          Let's get back to it!
+        </mj-text>
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#ffffff" padding="5px" css-class="content-section">
+      <mj-column width="100%">
+        <mj-image 
+          src="https://images.3mails.ai/org/id_an6wp2x0s/1773368171514-jfunwdwwvmn.png" 
+          alt="miami.png" 
+          width="1024px"
+          border="none"
+          padding="10px 0"
+          align="center"
+          container-background-color="#ffffff"
+          css-class="natural-image"
+        />
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#ffffff" padding="20px" css-class="content-section">
+      <mj-column>
+        <mj-button 
+          href="https://prohibitioners.com" 
+          background-color="#1976D2"
+          color="#ffffff"
+          font-size="18px"
+          font-weight="bold"
+          border-radius="4px"
+          padding="12px 24px"
+          css-class="button"
+        >
+          Play
+        </mj-button>
+      </mj-column>
+    </mj-section>
