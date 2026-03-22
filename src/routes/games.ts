@@ -331,6 +331,7 @@ gamesRouter.post('/:id/turn', async (c) => {
   }
   let policeEncounterResult: { vehicleId?: number; bribeCost: number; populationTier: string; heat: number } | null = null
   const celebrations: Array<{ type: string; cityId?: number; newTier?: number; vehicleId?: string; missionCardId?: number; reward?: number }> = []
+  const boughtThisTurn = new Map<number, number>()
 
   for (const action of actions as Action[]) {
 
@@ -657,8 +658,11 @@ gamesRouter.post('/:id/turn', async (c) => {
         ).bind(action.vehicleId).all<{ used: number }>()
         const cargoUsed = currentInv[0]?.used ?? 0
         const maxAfford = Math.floor(currentCash / priceRow.price)
-        const toBuy = Math.min(requested, cargoSlots - cargoUsed, maxAfford)
+        const alreadyBought = boughtThisTurn.get(action.vehicleId) ?? 0
+        const turnBudget = cargoSlots - alreadyBought
+        const toBuy = Math.min(requested, cargoSlots - cargoUsed, maxAfford, turnBudget)
         if (toBuy > 0) {
+          boughtThisTurn.set(action.vehicleId, alreadyBought + toBuy)
           const cost = Math.round(priceRow.price * toBuy)
           currentCash -= cost
           await c.env.PROHIBITIONDB.batch([
