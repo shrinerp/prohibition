@@ -13,6 +13,7 @@ import {
 import { applyBribeDuration, applyMovementModifier, applyCargoMultiplier, applyTakeoverCostModifier, applyProductionModifier, getCharacter } from '../game/characters'
 import { PROXIMITY_RADIUS, STASH_COST, MAX_JAIL_SEASONS, boobytrapCost, coordDistance, ALCOHOL_EMOJI } from '../game/stash'
 import { updateCumulativeProgress, checkAndCompleteMissions, drawMission, getMissionCard, type MissionSnapshot } from '../game/missions'
+import { sendPushToUser } from '../services/webPush'
 
 export const gamesRouter = new Hono<{ Bindings: Env; Variables: AuthVariables }>()
 
@@ -249,6 +250,27 @@ gamesRouter.post('/:id/invite', async (c) => {
   })
 
   if (!res.ok) return c.json({ success: false, message: 'Failed to send email' }, 500)
+
+  // Also send push if the invited email belongs to a registered user
+  const invitedUser = await c.env.PROHIBITIONDB.prepare(
+    `SELECT id FROM users WHERE email = ?`
+  ).bind(email).first<{ id: number }>()
+
+  if (invitedUser) {
+    c.executionCtx.waitUntil(
+      sendPushToUser(
+        c.env.PROHIBITIONDB,
+        invitedUser.id,
+        {
+          title: `${hostName} invited you to ${gameName}`,
+          body: 'Tap to join the game.',
+          url: joinUrl,
+        },
+        c.env,
+      )
+    )
+  }
+
   return c.json({ success: true })
 })
 
@@ -1139,13 +1161,13 @@ gamesRouter.post('/:id/turn', async (c) => {
 
   // Notify the next player by email if they don't have the game open
   const nextPlayer = await c.env.PROHIBITIONDB.prepare(
-    `SELECT gp.display_name, gp.last_seen_at, u.email, g.game_name
+    `SELECT gp.user_id, gp.display_name, gp.last_seen_at, u.email, g.game_name
      FROM game_players gp
      JOIN users u ON gp.user_id = u.id
      JOIN games g ON g.id = gp.game_id
      WHERE gp.game_id = ? AND gp.turn_order = ? AND gp.is_npc = 0`
   ).bind(gameId, nextIndex).first<{
-    display_name: string | null; last_seen_at: number | null; email: string | null; game_name: string | null
+    user_id: number; display_name: string | null; last_seen_at: number | null; email: string | null; game_name: string | null
   }>()
 
   const STALE_SECONDS = 120
@@ -1168,6 +1190,21 @@ gamesRouter.post('/:id/turn', async (c) => {
           },
         }),
       }).catch(() => {})
+    )
+  }
+
+  if (nextPlayer?.user_id && isAway) {
+    c.executionCtx.waitUntil(
+      sendPushToUser(
+        c.env.PROHIBITIONDB,
+        nextPlayer.user_id,
+        {
+          title: `It's your turn — ${nextPlayer.game_name ?? 'Prohibition'}`,
+          body: 'Your move, Boss.',
+          url: `https://prohibitioner.com/games/${gameId}`,
+        },
+        c.env,
+      )
     )
   }
 

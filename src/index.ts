@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { authRouter } from './routes/auth'
 import { gamesRouter } from './routes/games'
 import { adminRouter } from './routes/admin'
+import { pushRouter } from './routes/push'
 
 export interface Env {
   PROHIBITIONDB: D1Database
@@ -9,6 +10,9 @@ export interface Env {
   MAILS_API_KEY: string
   MAILS_ENDPOINT: string
   THREEMAILS_API_KEY: string
+  VAPID_PUBLIC_KEY: string
+  VAPID_PRIVATE_KEY: string
+  VAPID_SUBJECT: string
   ASSETS: { fetch: (req: Request) => Promise<Response> }
 }
 
@@ -53,6 +57,7 @@ Senders LLC, 2026
 app.route('/auth', authRouter)
 app.route('/api/games', gamesRouter)
 app.route('/api/admin', adminRouter)
+app.route('/api/push', pushRouter)
 
 // Serve static assets; fall back to index.html for SPA client-side routes
 app.all('*', async (c) => {

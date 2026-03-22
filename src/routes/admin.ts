@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import type { Env } from '../index'
 import type { AdminVariables } from '../middleware/adminAuth'
 import { adminAuth } from '../middleware/adminAuth'
+import { sendPushToUser } from '../services/webPush'
 
 export const adminRouter = new Hono<{ Bindings: Env; Variables: AdminVariables }>()
 
@@ -173,4 +174,29 @@ adminRouter.patch('/games/:id/players/:playerId', async (c) => {
   ).bind(...values).run()
 
   return c.json({ success: true })
+})
+
+// ── Test push notification (sends to the calling admin user) ──────────────────
+adminRouter.post('/test-push', async (c) => {
+  const userId = c.get('userId')
+  const { url } = await c.req.json<{ url?: string }>().catch(() => ({ url: undefined }))
+
+  const targetUrl = url?.trim() || 'https://game.prohibitioner.com/games'
+
+  const { results: subs } = await c.env.PROHIBITIONDB.prepare(
+    `SELECT id FROM push_subscriptions WHERE user_id = ?`
+  ).bind(userId).all<{ id: number }>()
+
+  if (!subs.length) {
+    return c.json({ success: false, message: 'No push subscriptions found for your account', subscriptionCount: 0 })
+  }
+
+  await sendPushToUser(
+    c.env.PROHIBITIONDB,
+    userId,
+    { title: 'Test notification', body: 'Push notifications are working!', url: targetUrl },
+    c.env,
+  )
+
+  return c.json({ success: true, message: `Sent to ${subs.length} subscription(s)`, subscriptionCount: subs.length, url: targetUrl })
 })
