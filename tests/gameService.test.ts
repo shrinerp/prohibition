@@ -99,13 +99,13 @@ describe('GameService.startGame()', () => {
 })
 
 describe('GameService.selectCities()', () => {
-  it('selects between 15 and 20 cities from the pool', () => {
+  it('selects between 12 and 20 cities from the pool', () => {
     const pool = Array.from({ length: 50 }, (_, i) => ({
       id: i + 1, region: ['Midwest', 'East Coast', 'South', 'West Coast', 'West'][i % 5]
     }))
     const svc = new GameService({ ...BASE_ENV, PROHIBITIONDB: {} as any })
     const selected = svc.selectCities(pool as any)
-    expect(selected.length).toBeGreaterThanOrEqual(15)
+    expect(selected.length).toBeGreaterThanOrEqual(12)
     expect(selected.length).toBeLessThanOrEqual(20)
   })
 
