@@ -52,6 +52,9 @@ export default function AdminPage() {
   const [editPlayer,   setEditPlayer]   = useState<{ gameId: string; player: PlayerRow; state: EditPlayerState } | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<{ type: 'game' | 'player'; gameId: string; playerId?: number; label: string } | null>(null)
   const [saving, setSaving] = useState(false)
+  const [pushUrl, setPushUrl] = useState('https://game.prohibitioner.com/games')
+  const [pushResult, setPushResult] = useState<{ ok: boolean; message: string } | null>(null)
+  const [pushSending, setPushSending] = useState(false)
 
   const fetchGames = useCallback(async () => {
     setLoading(true)
@@ -135,6 +138,24 @@ export default function AdminPage() {
     setSaving(false)
   }
 
+  async function sendTestPush() {
+    setPushSending(true)
+    setPushResult(null)
+    try {
+      const res = await fetch('/api/admin/test-push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: pushUrl }),
+      })
+      const d = await res.json() as { success: boolean; message?: string; subscriptionCount?: number }
+      setPushResult({ ok: d.success, message: d.message ?? (d.success ? 'Sent!' : 'Failed') })
+    } catch {
+      setPushResult({ ok: false, message: 'Request failed' })
+    } finally {
+      setPushSending(false)
+    }
+  }
+
   if (loading) return (
     <div className="min-h-screen bg-stone-950 flex items-center justify-center">
       <p className="text-stone-400">Loading…</p>
@@ -175,6 +196,32 @@ export default function AdminPage() {
           const count = tab === 'all' ? games.length : games.filter(g => g.status === tab).length
           return null // just showing all for now
         })}
+
+        {/* Push notification tester */}
+        <div className="bg-stone-900 border border-stone-700 rounded-lg p-4 space-y-3">
+          <p className="text-xs text-stone-400 uppercase tracking-widest font-bold">Push Notification Test</p>
+          <div className="flex gap-2 items-center">
+            <label className="text-xs text-stone-400 flex-shrink-0">URL to open:</label>
+            <input
+              type="text"
+              value={pushUrl}
+              onChange={e => setPushUrl(e.target.value)}
+              className="flex-1 bg-stone-800 border border-stone-600 rounded px-2 py-1 text-xs text-stone-200 focus:outline-none focus:border-amber-600"
+            />
+            <button
+              onClick={sendTestPush}
+              disabled={pushSending}
+              className="px-3 py-1.5 text-xs bg-amber-800 hover:bg-amber-700 disabled:opacity-50 text-amber-100 rounded transition font-bold"
+            >
+              {pushSending ? 'Sending…' : 'Send Test Push'}
+            </button>
+          </div>
+          {pushResult && (
+            <p className={`text-xs ${pushResult.ok ? 'text-green-400' : 'text-red-400'}`}>
+              {pushResult.message}
+            </p>
+          )}
+        </div>
 
         {/* Games table */}
         {games.length === 0 ? (

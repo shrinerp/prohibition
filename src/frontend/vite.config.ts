@@ -13,6 +13,9 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.ts',
       includeAssets: ['logo.png', 'apple-touch-icon.png', 'drinks/*.png', 'cities/*.png', 'vehicles/*.png'],
       manifest: {
         name: 'Prohibitioner: Risk and Profit',
@@ -31,33 +34,8 @@ export default defineConfig({
           { src: 'pwa-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
-      workbox: {
-        // Let the server handle the landing page and install page — don't intercept with SW
-        navigateFallback: '/index.html',
-        navigateFallbackDenylist: [/^\/$/, /^\/install$/],
-        // Exclude large landing-page images and screenshot from precache
+      injectManifest: {
         globIgnores: ['**/landing-*.png', '**/screenshot.png'],
-        // Cache static game assets (images, fonts, etc.)
-        runtimeCaching: [
-          {
-            urlPattern: /\/(?:drinks|cities|vehicles|stills|characters|city-maps)\/.*\.png$/,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'game-assets',
-              expiration: { maxEntries: 200, maxAgeSeconds: 60 * 60 * 24 * 30 },
-            },
-          },
-          {
-            // API calls — always network first, fall back to cache
-            urlPattern: /^https?:\/\/.*\/api\//,
-            handler: 'NetworkFirst',
-            options: {
-              cacheName: 'api-cache',
-              networkTimeoutSeconds: 10,
-              expiration: { maxEntries: 50, maxAgeSeconds: 60 * 5 },
-            },
-          },
-        ],
       },
     }),
   ],
