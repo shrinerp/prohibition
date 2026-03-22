@@ -40,6 +40,7 @@ interface SvgMapProps {
   reachableCityIds?: Set<number> | null
   pathCityIds?: Set<number> | null
   cityStockpiles?: Map<number, number>
+  simplified?: boolean
   onCityClick?: (cityId: number) => void
 }
 
@@ -71,7 +72,7 @@ function project(lat: number, lon: number): { x: number; y: number } | null {
   return coords ? { x: coords[0], y: coords[1] } : null
 }
 
-export default function SvgMap({ cities, roads, playerTokens, currentCityId, homeCityId, selectedCityId, reachableCityIds, pathCityIds, cityStockpiles, onCityClick, transparent }: SvgMapProps) {
+export default function SvgMap({ cities, roads, playerTokens, currentCityId, homeCityId, selectedCityId, reachableCityIds, pathCityIds, cityStockpiles, onCityClick, transparent, simplified }: SvgMapProps) {
   const positions = useMemo(() => {
     const map = new Map<number, { x: number; y: number }>()
     for (const city of cities) {
@@ -85,10 +86,10 @@ export default function SvgMap({ cities, roads, playerTokens, currentCityId, hom
     <svg
       viewBox={`0 0 ${SVG_W} ${SVG_H}`}
       className="w-full h-full"
-      style={{ background: transparent ? 'transparent' : '#1c1917' }}
+      style={{ background: (transparent || simplified) ? 'transparent' : '#1c1917' }}
     >
       {/* Water / ocean fill behind land */}
-      {!transparent && <rect width={SVG_W} height={SVG_H} fill="#1c1917" />}
+      {!transparent && !simplified && <rect width={SVG_W} height={SVG_H} fill="#1c1917" />}
 
       {/* Land fill */}
       <path d={NATION_D} fill="#292524" fillOpacity={transparent ? 0.7 : 1} />
@@ -187,7 +188,7 @@ export default function SvgMap({ cities, roads, playerTokens, currentCityId, hom
               </text>
             )}
             {/* Stockpile badge */}
-            {(cityStockpiles?.get(city.id) ?? 0) > 0 && (
+            {!simplified && (cityStockpiles?.get(city.id) ?? 0) > 0 && (
               <g style={{ pointerEvents: 'none' }}>
                 <rect x={pos.x + 4} y={pos.y - r - 8} width={14} height={9} rx={2}
                   fill="#14532d" stroke="#4ade80" strokeWidth="0.8" />
@@ -202,7 +203,7 @@ export default function SvgMap({ cities, roads, playerTokens, currentCityId, hom
       })}
 
       {/* Player tokens — small circles offset above their city */}
-      {playerTokens.map((token, i) => {
+      {(simplified ? playerTokens.filter(t => t.isMe) : playerTokens).map((token, i) => {
         const pos = positions.get(token.cityId)
         if (!pos) return null
         const offsetX = (i % 3 - 1) * 10
