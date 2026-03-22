@@ -65,7 +65,7 @@ describe('GameService.joinGame()', () => {
   })
 
   it('returns error when game is full (5 players)', async () => {
-    const db = makeDb({ firstResult: { id: 'g1', status: 'lobby', player_count: 5 } })
+    const db = makeDb({ firstResult: { id: 'g1', status: 'lobby', player_count: 5, max_players: 5 } })
     const svc = new GameService({ ...BASE_ENV, PROHIBITIONDB: db as any })
     const result = await svc.joinGame('code123', 99)
     expect(result.success).toBe(false)
