@@ -18,19 +18,19 @@ describe('calculateSuccessRate()', () => {
     expect(calculateSuccessRate('bootlegger', 'small')).toBeCloseTo(0.5)
   })
 
-  it('Gangster gets +15% bonus', () => {
+  it('Gangster gets same rate as any other class (bonus removed)', () => {
     const base = calculateSuccessRate('bootlegger', 'small')
     const gangster = calculateSuccessRate('gangster', 'small')
-    expect(gangster).toBeCloseTo(base + 0.15)
+    expect(gangster).toBeCloseTo(base)
   })
 
-  it('Union Leader gets +20% bonus in large/major city', () => {
+  it('Union Leader gets same rate in large city (bonus removed)', () => {
     const base = calculateSuccessRate('bootlegger', 'large')
     const ul = calculateSuccessRate('union_leader', 'large')
-    expect(ul).toBeCloseTo(base + 0.2)
+    expect(ul).toBeCloseTo(base)
   })
 
-  it('Union Leader bonus does NOT apply in small city', () => {
+  it('Union Leader rate is same in small city', () => {
     const base = calculateSuccessRate('bootlegger', 'small')
     const ul = calculateSuccessRate('union_leader', 'small')
     expect(ul).toBeCloseTo(base)
@@ -65,11 +65,10 @@ describe('resolveDoubleCross()', () => {
     expect(result.heatDelta).toBe(20)  // failure heat penalty
   })
 
-  it('Jazz Singer victim loses more cash on failure', () => {
+  it('Jazz Singer victim loses same cash as any other class (no special multiplier)', () => {
     const jazzTarget = { ...neutralTarget, characterClass: 'jazz_singer' }
     const normalResult = resolveDoubleCross('bootlegger', neutralTarget, true)
     const jazzResult = resolveDoubleCross('bootlegger', jazzTarget, true)
-    // Jazz Singer loses more cash (cashLossOnRobMultiplier: 1.35)
-    expect(Math.abs(jazzResult.victimCashLoss)).toBeGreaterThan(Math.abs(normalResult.victimCashLoss))
+    expect(Math.abs(jazzResult.victimCashLoss)).toBe(Math.abs(normalResult.victimCashLoss))
   })
 })
