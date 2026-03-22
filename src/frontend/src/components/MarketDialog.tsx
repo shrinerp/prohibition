@@ -31,13 +31,23 @@ interface MarketDialogProps {
   cash: number
   cargoFree: number
   currentCityId?: number | null
+  characterClass?: string
+  purchaseBudgetExhausted?: boolean
   onClose: () => void
   onAction: (actions: PendingAction[]) => void
 }
 
+/** Mirror of the backend sell multiplier logic in games.ts */
+function getSellMultiplier(characterClass: string | undefined, alcoholType: string): number {
+  if (characterClass === 'pharmacist' && alcoholType === 'whiskey') return 1.5
+  if (characterClass === 'rum_runner')  return 0.85
+  if (characterClass === 'socialite')   return 1.25
+  return 1.0
+}
+
 export default function MarketDialog({
   cityName, prices, inventory, distilleryStock,
-  cash, cargoFree, currentCityId, onClose, onAction
+  cash, cargoFree, currentCityId, characterClass, purchaseBudgetExhausted, onClose, onAction
 }: MarketDialogProps) {
   const [tab, setTab] = useState<'buy' | 'sell'>('buy')
 
@@ -98,7 +108,7 @@ export default function MarketDialog({
             </div>
             {distilleryStock.map(row => {
               const takeQty   = Math.min(row.quantity, cargoFree)
-              const sellPrice = prices.find(x => x.alcoholType === row.alcohol_type)?.price ?? 0
+              const sellPrice = Math.round((prices.find(x => x.alcoholType === row.alcohol_type)?.price ?? 0) * getSellMultiplier(characterClass, row.alcohol_type))
               return (
                 <div key={row.alcohol_type} className="flex items-center justify-between py-1 border-b border-stone-800 last:border-0 gap-1">
                   <span className="text-sm capitalize text-stone-300 flex-1">{row.alcohol_type}
@@ -149,6 +159,11 @@ export default function MarketDialog({
           {/* ── Buy tab ── */}
           {tab === 'buy' && (
             <>
+              {purchaseBudgetExhausted && (
+                <p className="text-amber-500 text-xs bg-amber-950/40 border border-amber-800 rounded px-3 py-2">
+                  Purchase limit reached — you've filled your vehicles' capacity for this turn.
+                </p>
+              )}
               {/* Price table */}
               {sortedPrices.length === 0 ? (
                 <p className="text-stone-500 text-xs italic">No market data this season</p>
@@ -177,7 +192,7 @@ export default function MarketDialog({
                           </td>
                           <td className="text-right pl-2">
                             <button
-                              disabled={maxBuy <= 0}
+                              disabled={maxBuy <= 0 || purchaseBudgetExhausted}
                               onClick={() => onAction([{ type: 'buy', alcoholType: p.alcoholType, quantity: maxBuy }])}
                               className="px-2 py-1 bg-blue-900 hover:bg-blue-800 disabled:opacity-40 text-blue-200 rounded transition tabular-nums"
                             >
@@ -201,7 +216,7 @@ export default function MarketDialog({
               ) : (
                 inventory.map(item => {
                   const p         = prices.find(x => x.alcoholType === item.alcoholType)
-                  const unitPrice = p?.price ?? 0
+                  const unitPrice = Math.round((p?.price ?? 0) * getSellMultiplier(characterClass, item.alcoholType))
                   const revenue   = unitPrice * item.units
                   return (
                     <div key={item.alcoholType} className="flex items-center justify-between py-2 border-b border-stone-800 gap-2">

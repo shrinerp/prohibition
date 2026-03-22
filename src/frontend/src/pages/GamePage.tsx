@@ -23,6 +23,7 @@ import WelcomeDialog   from '../components/WelcomeDialog'
 import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch'
 import MissionPanel      from '../components/MissionPanel'
 import DrawnCardDialog  from '../components/DrawnCardDialog'
+import { usePushSubscription } from '../hooks/usePushSubscription'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const ALCOHOL_EMOJI: Record<string, string> = {
@@ -326,6 +327,9 @@ export default function GamePage() {
   const missionIdsBeforeDrawRef = useRef<Set<number> | null>(null)
   const [welcomeOpen, setWelcomeOpen] = useState(false)
   const [tutorialOpen, setTutorialOpen] = useState(false)
+  const [simplifiedMap, setSimplifiedMap] = useState(false)
+  const [characterPopup, setCharacterPopup] = useState<{ name: string; perk: string; drawback: string } | null>(null)
+  const [boughtThisTurn, setBoughtThisTurn] = useState<Map<number, number>>(new Map())
 
   const fetchAll = useCallback(async () => {
     if (!gameId) return
@@ -399,6 +403,8 @@ export default function GamePage() {
       document.removeEventListener('visibilitychange', ping)
     }
   }, [gameId])
+
+  usePushSubscription()
 
   async function dismissDrinks() {
     await fetch(`/api/games/${gameId}/dismiss-drinks`, { method: 'POST' })
@@ -621,11 +627,16 @@ export default function GamePage() {
 
   function rollToMove() {
     if (!player) return
-    // If already rolled this turn, just re-enter move mode without re-rolling
+    // If already rolled this turn, re-enter move mode preserving existing selections
     if (diceRoll != null) {
-      const effective = applyCharModifier(diceRoll, player.characterClass)
-      setRemainingBudget(effective)
-      setVehicleMoves(player.vehicles.map(v => ({ vehicleId: v.id, targetPath: [], allocatedPoints: 0 })))
+      // Ensure all vehicles have an entry (may be missing if vehicles were acquired mid-turn)
+      setVehicleMoves(prev => {
+        const existingIds = new Set(prev.map(vm => vm.vehicleId))
+        const additions = player.vehicles
+          .filter(v => !existingIds.has(v.id))
+          .map(v => ({ vehicleId: v.id, targetPath: [], allocatedPoints: 0 }))
+        return additions.length > 0 ? [...prev, ...additions] : prev
+      })
       setSelectedVehicleId(player.vehicles[0]?.id ?? null)
       setMoveMode(true)
       return
@@ -642,8 +653,14 @@ export default function GamePage() {
   }
 
   function cancelMove() {
+    // Exit move-planning UI but preserve vehicleMoves — selections persist until turn ends
     setMoveMode(false)
-    // Keep diceRoll — player cannot re-roll once they've seen a result
+    setSelectedVehicleId(null)
+  }
+
+  function resetMovement() {
+    // Full reset — only called after a turn is actually submitted
+    setMoveMode(false)
     setVehicleMoves([])
     setSelectedVehicleId(null)
     setRemainingBudget(0)
@@ -663,7 +680,7 @@ export default function GamePage() {
   async function submitTurn(actions: unknown[], { refresh = true } = {}) {
     if (refresh) {
       setTurnPending(true)
-      cancelMove()
+      resetMovement()
       closeAllDialogs()
       // Yield to the browser so React can commit + paint the loading state
       // before the fetch starts. rAF fires after the next paint frame.
@@ -686,8 +703,8 @@ export default function GamePage() {
       if (data.celebrations?.length) {
         setCelebrationQueue(prev => [...prev, ...data.celebrations])
       }
-      if (refresh) { setDiceRoll(null); await fetchAll() }
-      else cancelMove()
+      if (refresh) { setDiceRoll(null); setBoughtThisTurn(new Map()); await fetchAll() }
+      else resetMovement()
     } finally {
       if (refresh) setTurnPending(false)
     }
@@ -815,6 +832,14 @@ export default function GamePage() {
 
     return (
       <div className="min-h-screen bg-stone-900 p-6 flex flex-col items-center gap-6">
+        <div className="w-full max-w-5xl flex justify-start">
+          <button
+            onClick={() => nav('/games')}
+            className="text-xs text-stone-500 hover:text-amber-400 transition"
+          >
+            ← My Games
+          </button>
+        </div>
         <h2 className="text-3xl font-bold text-amber-400">Speakeasy Lobby</h2>
 
         <div className="flex gap-6 flex-wrap justify-center">
@@ -1393,6 +1418,11 @@ export default function GamePage() {
           const marketStock = canPickUpAtMarketCity
             ? cityInventory.filter(r => r.city_id === viewCityId && r.quantity > 0)
             : []
+          const totalRemainingBudget = vehiclesAtCity.reduce((sum, v) => {
+            const slots = v.cargoSlots ?? 16
+            const bought = boughtThisTurn.get(v.id) ?? 0
+            return sum + Math.max(0, slots - bought)
+          }, 0)
           return (
             <MarketDialog
               cityName={mapCities.find(c => c.id === viewCityId)?.name ?? 'Market'}
@@ -1402,6 +1432,8 @@ export default function GamePage() {
               cash={player?.cash ?? 0}
               cargoFree={marketCargoFree}
               currentCityId={viewCityId}
+              characterClass={player?.characterClass}
+              purchaseBudgetExhausted={totalRemainingBudget === 0 && vehiclesAtCity.some(v => (boughtThisTurn.get(v.id) ?? 0) > 0)}
               onClose={() => setMarketOpen(false)}
               onAction={async (actions) => {
                 // Distribute each action across vehicles at this city.
@@ -1409,7 +1441,7 @@ export default function GamePage() {
                 // the backend clamps each to per-vehicle cargo space and available city stock,
                 // so using stale cargo amounts here is not needed.
                 // For sell: distribute using snapshot inventory (accurate at click time).
-                type RawAction = { type: string; alcoholType?: string; quantity?: number; [key: string]: unknown }
+                type RawAction = { type: string; alcoholType?: string; quantity?: number; vehicleId?: number; [key: string]: unknown }
                 const expanded: RawAction[] = []
                 for (const action of actions as RawAction[]) {
                   if ((action.type === 'pickup' || action.type === 'buy') && action.quantity && vehiclesAtCity.length > 1) {
@@ -1431,6 +1463,16 @@ export default function GamePage() {
                   }
                 }
                 await submitTurn(expanded, { refresh: false })
+                // Accumulate buy quantities for the per-turn budget tracker
+                for (const action of expanded) {
+                  if (action.type === 'buy' && action.vehicleId != null && action.quantity) {
+                    setBoughtThisTurn(prev => {
+                      const next = new Map(prev)
+                      next.set(action.vehicleId!, (next.get(action.vehicleId!) ?? 0) + (action.quantity as number))
+                      return next
+                    })
+                  }
+                }
                 fetchAll()
               }}
             />
@@ -1450,6 +1492,18 @@ export default function GamePage() {
                 {player?.missions?.length}
               </span>
             )}
+          </button>
+          {/* Simplified map toggle — top-left */}
+          <button
+            onClick={() => setSimplifiedMap(s => !s)}
+            title={simplifiedMap ? 'Show full map' : 'Simplified view'}
+            className={`absolute top-2 left-2 z-10 flex items-center gap-1.5 px-3 py-1.5 backdrop-blur-sm border rounded uppercase tracking-wide text-xs font-bold transition ${
+              simplifiedMap
+                ? 'bg-amber-900/80 border-amber-500 text-amber-200 hover:bg-amber-800/80'
+                : 'bg-stone-900/80 border-stone-600 text-stone-400 hover:bg-stone-700/80 hover:text-stone-200'
+            }`}
+          >
+            {simplifiedMap ? '🗺 Full' : '⬡ Simple'}
           </button>
           {turnPending && (
             <div className="absolute inset-0 z-30 bg-black/40 flex items-center justify-center pointer-events-all cursor-wait" />
@@ -1521,6 +1575,7 @@ export default function GamePage() {
                   cityStockpiles={cityStockpileTotal}
                   onCityClick={handleCityClick}
                   transparent={viewCityId != null}
+                  simplified={simplifiedMap}
                 />
               </div>
             </TransformComponent>
@@ -1686,8 +1741,41 @@ export default function GamePage() {
                 </div>
               ) : (
                 <>
+                  {/* Pending route summary — shown when player selected destinations then exited move mode */}
+                  {diceRoll != null && vehicleMoves.some(vm => vm.targetPath.length > 0) && (() => {
+                    const movers = vehicleMoves.filter(vm => vm.targetPath.length > 0)
+                    return (
+                      <div className="bg-green-950 border border-green-700 rounded p-2 space-y-1">
+                        <p className="text-green-400 text-xs font-bold uppercase tracking-wide">Route Planned</p>
+                        {movers.map(vm => {
+                          const v = player?.vehicles?.find(vv => vv.id === vm.vehicleId)
+                          const destName = mapCities.find(c => c.id === vm.targetPath[vm.targetPath.length - 1])?.name ?? '?'
+                          return (
+                            <p key={vm.vehicleId} className="text-xs text-green-300">
+                              {v?.vehicleType.replace(/_/g, ' ') ?? 'Vehicle'} → {destName}
+                            </p>
+                          )
+                        })}
+                        <div className="flex gap-1 pt-1">
+                          <button
+                            onClick={() => submitTurn([{ type: 'move', roll: diceRoll, vehicles: vehicleMoves.filter(vm => vm.targetPath.length > 0) }])}
+                            className="flex-1 py-1.5 bg-green-700 hover:bg-green-600 text-white font-bold rounded text-xs uppercase tracking-wide transition"
+                          >
+                            Confirm Move
+                          </button>
+                          <button
+                            onClick={rollToMove}
+                            className="flex-1 py-1.5 border border-green-700 hover:bg-green-900 text-green-300 font-bold rounded text-xs uppercase tracking-wide transition"
+                          >
+                            Change
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })()}
+
                   {/* Fleet location summary */}
-                  {(player?.vehicles ?? []).length > 0 && (
+                  {(player?.vehicles ?? []).length > 0 && !(diceRoll != null && vehicleMoves.some(vm => vm.targetPath.length > 0)) && (
                     <div className="text-xs space-y-0.5">
                       {(player?.vehicles ?? []).map(v => {
                         const cityName = mapCities.find(c => c.id === v.cityId)?.name ?? `City ${v.cityId}`
@@ -1787,10 +1875,19 @@ export default function GamePage() {
                   })()}
                   <hr className="border-stone-700" />
                   <button
-                    onClick={() => submitTurn([{ type: 'skip' }])}
-                    className="w-full py-2 text-stone-500 hover:text-stone-300 text-xs uppercase tracking-wide transition"
+                    onClick={() => {
+                      resetMovement()
+                      submitTurn([{ type: 'skip' }])
+                    }}
+                    className={`w-full py-2 text-xs uppercase tracking-wide transition ${
+                      diceRoll != null && vehicleMoves.some(vm => vm.targetPath.length > 0)
+                        ? 'text-red-500 hover:text-red-300'
+                        : 'text-stone-500 hover:text-stone-300'
+                    }`}
                   >
-                    End Turn (Skip)
+                    {diceRoll != null && vehicleMoves.some(vm => vm.targetPath.length > 0)
+                      ? 'End Turn Without Moving'
+                      : 'End Turn (Skip)'}
                   </button>
                 </>
               )}
@@ -1823,10 +1920,16 @@ export default function GamePage() {
               {fullState.players.map((p, i) => (
                 <div key={p.id} className="flex items-center gap-2 text-xs">
                   <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: PLAYER_COLORS[i % PLAYER_COLORS.length] }} />
-                  <span className={p.id === player?.id ? 'text-amber-400' : 'text-stone-400'}>
+                  <button
+                    onClick={() => {
+                      const charInfo = CHARACTER_DISPLAY[p.characterClass]
+                      if (charInfo) setCharacterPopup(charInfo)
+                    }}
+                    className={`text-left hover:underline transition ${p.id === player?.id ? 'text-amber-400' : 'text-stone-400 hover:text-stone-200'}`}
+                  >
                     {p.name}{p.isNpc ? ' (NPC)' : ''}
                     {p.turnOrder === game?.currentPlayerIndex ? ' ●' : ''}
-                  </span>
+                  </button>
                 </div>
               ))}
             </div>
@@ -1835,6 +1938,31 @@ export default function GamePage() {
         </div>}
         </div>
       </div>
+
+      {/* Character info popup */}
+      {characterPopup && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          onClick={() => setCharacterPopup(null)}
+        >
+          <div
+            className="bg-stone-900 border border-amber-700 rounded-lg p-5 max-w-xs w-full mx-4 space-y-3"
+            onClick={e => e.stopPropagation()}
+          >
+            <p className="text-amber-400 font-bold text-sm">{characterPopup.name}</p>
+            <div className="space-y-1 text-xs">
+              <p className="text-green-400">✦ {characterPopup.perk}</p>
+              <p className="text-red-400">✦ {characterPopup.drawback}</p>
+            </div>
+            <button
+              onClick={() => setCharacterPopup(null)}
+              className="w-full py-1.5 bg-stone-700 hover:bg-stone-600 text-stone-200 text-xs rounded transition"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Welcome dialog — first step of FTUX */}
       {welcomeOpen && (
