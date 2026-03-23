@@ -27,31 +27,31 @@ describe('MISSION_CARDS', () => {
     expect(counts.legendary).toBe(13)
   })
 
-  it('easy rewards are 100–275', () => {
+  it('easy rewards are 50–138', () => {
     for (const card of MISSION_CARDS.filter(c => c.tier === 'easy')) {
-      expect(card.reward).toBeGreaterThanOrEqual(100)
-      expect(card.reward).toBeLessThanOrEqual(275)
+      expect(card.reward).toBeGreaterThanOrEqual(50)
+      expect(card.reward).toBeLessThanOrEqual(138)
     }
   })
 
-  it('medium rewards are 425–850', () => {
+  it('medium rewards are 213–425', () => {
     for (const card of MISSION_CARDS.filter(c => c.tier === 'medium')) {
-      expect(card.reward).toBeGreaterThanOrEqual(425)
-      expect(card.reward).toBeLessThanOrEqual(850)
+      expect(card.reward).toBeGreaterThanOrEqual(213)
+      expect(card.reward).toBeLessThanOrEqual(425)
     }
   })
 
-  it('hard rewards are 1050–1750', () => {
+  it('hard rewards are 525–875', () => {
     for (const card of MISSION_CARDS.filter(c => c.tier === 'hard')) {
-      expect(card.reward).toBeGreaterThanOrEqual(1050)
-      expect(card.reward).toBeLessThanOrEqual(1750)
+      expect(card.reward).toBeGreaterThanOrEqual(525)
+      expect(card.reward).toBeLessThanOrEqual(875)
     }
   })
 
-  it('legendary rewards are 2100–3150', () => {
+  it('legendary rewards are 1050–1575', () => {
     for (const card of MISSION_CARDS.filter(c => c.tier === 'legendary')) {
-      expect(card.reward).toBeGreaterThanOrEqual(2100)
-      expect(card.reward).toBeLessThanOrEqual(3150)
+      expect(card.reward).toBeGreaterThanOrEqual(1050)
+      expect(card.reward).toBeLessThanOrEqual(1575)
     }
   })
 
@@ -139,12 +139,12 @@ describe('checkAndCompleteMissions()', () => {
   })
 
   it('completes a cash_gte mission when cash meets target', async () => {
-    // Card 1: cash_gte target 500, reward 100
+    // Card 1: cash_gte target 500, reward 50
     const db = makeDb([{ id: 10, card_id: 1, progress: '{}' }]) as unknown as D1Database
     const snap: MissionSnapshot = { ...baseSnapshot, cash: 600 }
     const result = await checkAndCompleteMissions(db, 'game1', 1, 1, snap)
     expect(result.completedCardIds).toContain(1)
-    expect(result.totalReward).toBe(100)
+    expect(result.totalReward).toBe(50)
   })
 
   it('does not complete cash_gte mission when cash below target', async () => {
@@ -155,7 +155,7 @@ describe('checkAndCompleteMissions()', () => {
   })
 
   it('completes heat_at_most when heat is at or below target', async () => {
-    // Card 4: heat_at_most 20, reward 600
+    // Card 4: heat_at_most 20, reward 63
     const db = makeDb([{ id: 11, card_id: 4, progress: '{}' }]) as unknown as D1Database
     const snap: MissionSnapshot = { ...baseSnapshot, heat: 20 }
     const result = await checkAndCompleteMissions(db, 'game1', 1, 1, snap)
