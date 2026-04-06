@@ -1387,12 +1387,18 @@ export default function GamePage() {
                 <HeatMeter heat={player?.heat ?? 0} />
               </div>
 
-              <button
-                onClick={() => setShowPaper(true)}
-                className="w-full py-1.5 border border-stone-600 hover:border-amber-600 hover:text-amber-300 text-stone-400 text-xs font-bold rounded uppercase tracking-wide transition flex items-center justify-center gap-1.5"
-              >
-                📰 Prohibition Times
-              </button>
+              <div className="bg-stone-800 border border-stone-600 rounded p-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-stone-400 uppercase tracking-wider">Cash</p>
+                  <button
+                    onClick={() => setNetWorthOpen(true)}
+                    className="text-xs text-stone-500 hover:text-amber-300 underline underline-offset-2 transition"
+                  >
+                    Net Worth
+                  </button>
+                </div>
+                <p className="text-2xl font-bold text-green-400">${(player?.cash ?? 0).toLocaleString()}</p>
+              </div>
 
               {homeCity && (() => {
                 const otherDists = (player?.distilleries ?? []).filter(d => d.cityId !== player?.homeCityId)
@@ -1494,18 +1500,12 @@ export default function GamePage() {
                 }}
               />
 
-              <div className="bg-stone-800 border border-stone-600 rounded p-3">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs text-stone-400 uppercase tracking-wider">Cash</p>
-                  <button
-                    onClick={() => setNetWorthOpen(true)}
-                    className="text-xs text-stone-500 hover:text-amber-300 underline underline-offset-2 transition"
-                  >
-                    Net Worth
-                  </button>
-                </div>
-                <p className="text-2xl font-bold text-green-400">${(player?.cash ?? 0).toLocaleString()}</p>
-              </div>
+              <button
+                onClick={() => setShowPaper(true)}
+                className="w-full py-1.5 border border-stone-600 hover:border-amber-600 hover:text-amber-300 text-stone-400 text-xs font-bold rounded uppercase tracking-wide transition flex items-center justify-center gap-1.5"
+              >
+                📰 Prohibition Times
+              </button>
 
             </div>
           )}
