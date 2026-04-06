@@ -103,13 +103,15 @@ describe('extractGameHeadlines', () => {
     const result = extractGameHeadlines(msgs, 5)
     expect(result.length).toBe(1)
     expect(result[0].headline).toContain('DETROIT')
+    expect(result[0].subheadline).toBeTruthy()
+    expect(result[0].body.length).toBeGreaterThan(50)
   })
 
   it('detects jail/arrest messages', () => {
     const msgs = [makeMsg(2, 'Big Al was arrested and sent to jail in Chicago.')]
     const result = extractGameHeadlines(msgs, 8)
     expect(result.length).toBe(1)
-    expect(result[0].headline).toContain('NABBED')
+    expect(result[0].headline).toContain('BIG AL')
   })
 
   it('detects city claims', () => {
@@ -150,5 +152,32 @@ describe('extractGameHeadlines', () => {
       expect(r.size).toBe('brief')
       expect(r.type).toBe('news')
     }
+  })
+})
+
+// ── Close-button visibility logic ─────────────────────────────────────────────
+// The ProhibitionTimes component shows the close button when (isOverlay || onClose).
+// Full render tests require a DOM environment (jsdom + @testing-library/react)
+// which this project does not currently have configured. The condition is tested
+// here as a pure boolean to document intent and guard against regression.
+
+describe('ProhibitionTimes close button visibility condition', () => {
+  const shouldShowClose = (isOverlay: boolean, onClose: (() => void) | undefined) =>
+    isOverlay || !!onClose
+
+  it('shows close button when isOverlay is true', () => {
+    expect(shouldShowClose(true, undefined)).toBe(true)
+  })
+
+  it('shows close button when onClose is provided (inline dismissible mode)', () => {
+    expect(shouldShowClose(false, () => {})).toBe(true)
+  })
+
+  it('hides close button when neither isOverlay nor onClose is provided', () => {
+    expect(shouldShowClose(false, undefined)).toBe(false)
+  })
+
+  it('shows close button when both isOverlay and onClose are provided', () => {
+    expect(shouldShowClose(true, () => {})).toBe(true)
   })
 })

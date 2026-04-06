@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   PROHIBITION_STORIES,
   extractGameHeadlines,
@@ -38,103 +38,10 @@ function seasonToDateline(season: number): { year: number; month: string; vol: n
   return { year, month: MONTH_NAMES[monthIdx], vol: season }
 }
 
-// ── Story card sub-components ─────────────────────────────────────────────────
-
-function BannerStory({ story }: { story: ProhibitionStory }) {
-  return (
-    <div className="border-b-2 border-stone-800 pb-3 mb-3">
-      {story.imageUrl && (
-        <img
-          src={story.imageUrl}
-          alt={story.headline}
-          className="w-full h-40 object-cover mb-2"
-          style={{ filter: 'sepia(1) contrast(0.85) brightness(0.88)' }}
-          onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
-        />
-      )}
-      <h2 className="font-serif text-lg font-black leading-tight uppercase tracking-wide text-stone-900 mb-1">
-        {story.headline}
-      </h2>
-      {story.subheadline && (
-        <p className="font-serif text-sm italic text-stone-700 mb-1">{story.subheadline}</p>
-      )}
-      <p className="text-xs leading-relaxed text-stone-800">{story.body}</p>
-      {story.sourceUrl && (
-        <a href={story.sourceUrl} target="_blank" rel="noopener noreferrer"
-          className="text-xs text-stone-500 hover:text-stone-700 underline mt-0.5 inline-block">
-          Read more →
-        </a>
-      )}
-    </div>
-  )
-}
-
-function FeatureStory({ story }: { story: ProhibitionStory }) {
-  return (
-    <div className="border-b border-stone-600 pb-2 mb-2">
-      {story.imageUrl && (
-        <img
-          src={story.imageUrl}
-          alt={story.headline}
-          className="w-full h-24 object-cover mb-1.5"
-          style={{ filter: 'sepia(1) contrast(0.85) brightness(0.88)' }}
-          onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
-        />
-      )}
-      <h3 className="font-serif text-sm font-black leading-tight uppercase tracking-wide text-stone-900 mb-0.5">
-        {story.headline}
-      </h3>
-      {story.subheadline && (
-        <p className="font-serif text-xs italic text-stone-600 mb-0.5">{story.subheadline}</p>
-      )}
-      <p className="text-xs leading-relaxed text-stone-800">{story.body}</p>
-      {story.sourceUrl && (
-        <a href={story.sourceUrl} target="_blank" rel="noopener noreferrer"
-          className="text-xs text-stone-500 hover:text-stone-700 underline mt-0.5 inline-block">
-          Read more →
-        </a>
-      )}
-    </div>
-  )
-}
-
-function BriefStory({ story }: { story: ProhibitionStory }) {
-  return (
-    <div className="border-b border-stone-400 pb-1.5 mb-1.5 last:border-b-0 last:pb-0 last:mb-0">
-      <p className="font-serif text-xs font-black uppercase tracking-wide text-stone-900 leading-tight mb-0.5">
-        {story.headline}
-      </p>
-      <p className="text-xs leading-relaxed text-stone-700">{story.body}</p>
-    </div>
-  )
-}
-
-function AdBox({ story }: { story: ProhibitionStory }) {
-  return (
-    <div className="border-2 border-stone-700 p-2 mb-2 bg-amber-100/60 text-center">
-      <p className="font-serif text-xs font-black uppercase tracking-wider text-stone-900 leading-tight mb-1">
-        {story.headline}
-      </p>
-      <p className="text-xs leading-snug text-stone-700 italic">{story.body}</p>
-    </div>
-  )
-}
-
-function OpinionBox({ story }: { story: ProhibitionStory }) {
-  return (
-    <div className="border border-stone-600 p-2 mb-2 bg-amber-50/80">
-      <p className="font-serif text-xs font-black uppercase tracking-wide text-stone-800 mb-0.5 border-b border-stone-500 pb-0.5">
-        Opinion
-      </p>
-      <p className="font-serif text-xs font-bold text-stone-900 leading-tight mb-0.5 italic">
-        {story.headline}
-      </p>
-      {story.subheadline && (
-        <p className="text-xs text-stone-600 italic mb-0.5">{story.subheadline}</p>
-      )}
-      <p className="text-xs leading-relaxed text-stone-700">{story.body}</p>
-    </div>
-  )
+const TYPE_LABEL: Record<string, string> = {
+  news: 'News',
+  opinion: 'Opinion',
+  ad: 'Advertisement',
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -142,6 +49,7 @@ function OpinionBox({ story }: { story: ProhibitionStory }) {
 export default function ProhibitionTimes({ gameId, currentSeason, onClose, isOverlay }: ProhibitionTimesProps) {
   const [systemMessages, setSystemMessages] = useState<GameMessage[]>([])
   const hasFetched = useRef(false)
+  const [storyIndex, setStoryIndex] = useState(0)
 
   // Fetch recent system messages once on mount
   useEffect(() => {
@@ -161,8 +69,8 @@ export default function ProhibitionTimes({ gameId, currentSeason, onClose, isOve
 
   const { year, month, vol } = seasonToDateline(currentSeason)
 
-  // Build edition — seeded by season for stability, randomised per season
-  const edition = useMemo(() => {
+  // Build ordered story list for this edition
+  const stories = useMemo(() => {
     const newsPool = seededShuffle(getStoriesForYear(year, ['news']), currentSeason * 17)
     const opinionPool = seededShuffle(
       PROHIBITION_STORIES.filter(s => s.type === 'opinion'),
@@ -178,28 +86,55 @@ export default function ProhibitionTimes({ gameId, currentSeason, onClose, isOve
     const features = newsPool.filter(s => s !== banner && s.size !== 'brief').slice(0, 2)
     const briefs = newsPool.filter(s => s !== banner && !features.includes(s) && s.size === 'brief').slice(0, 3)
     const opinion = opinionPool[0] ?? null
-    const ads = adPool.slice(0, 3)
+    const ads = adPool.slice(0, 2)
 
-    return { banner, features, briefs, opinion, ads, gameEvents }
+    // Order: game events first, then banner, features, briefs, opinion, ads
+    const list: ProhibitionStory[] = [
+      ...gameEvents,
+      ...(banner ? [banner] : []),
+      ...features,
+      ...briefs,
+      ...(opinion ? [opinion] : []),
+      ...ads,
+    ]
+    return list
   }, [year, currentSeason, systemMessages])
 
-  const content = (
+  const total = stories.length
+  const story = stories[storyIndex] ?? null
+
+  // Reset when season changes
+  useEffect(() => { setStoryIndex(0) }, [currentSeason])
+
+  const prev = useCallback(() => setStoryIndex(i => (i - 1 + total) % total), [total])
+  const next = useCallback(() => setStoryIndex(i => (i + 1) % total), [total])
+
+  const inner = (
     <div
-      className="bg-amber-50 text-stone-900 max-w-2xl w-full mx-auto rounded shadow-2xl overflow-hidden"
-      style={{ filter: 'sepia(0.18)' }}
+      className="flex flex-col bg-amber-50 text-stone-900"
+      style={{ filter: 'sepia(0.18)', height: '100%' }}
     >
+      {/* Waiting banner — only shown in inline (non-overlay) mode */}
+      {!isOverlay && (
+        <div className="bg-stone-800 text-amber-100 text-center py-1.5 px-4 flex-shrink-0">
+          <p className="text-xs font-serif tracking-widest uppercase">
+            ✦ Waiting for your turn — catch up on the news ✦
+          </p>
+        </div>
+      )}
+
       {/* Masthead */}
-      <div className="border-b-4 border-double border-stone-800 px-4 pt-3 pb-2 text-center">
-        {isOverlay && (
+      <div className="border-b-4 border-double border-stone-800 px-4 pt-3 pb-2 text-center flex-shrink-0 relative">
+        {(isOverlay || onClose) && (
           <button
             onClick={onClose}
-            className="absolute top-3 right-4 text-stone-600 hover:text-stone-900 text-xl font-bold leading-none"
+            className="absolute top-3 right-4 text-stone-600 hover:text-stone-900 text-xl font-bold leading-none cursor-pointer"
             aria-label="Close newspaper"
           >✕</button>
         )}
-        <div className="border-b border-stone-700 mb-1 pb-1">
-          <p className="text-xs tracking-[0.3em] uppercase text-stone-600 font-serif">Est. 1920 · Chicago, Ill.</p>
-        </div>
+        <p className="text-xs tracking-[0.3em] uppercase text-stone-600 font-serif border-b border-stone-700 mb-1 pb-1">
+          Est. 1920 · Chicago, Ill.
+        </p>
         <h1 className="font-serif text-3xl font-black tracking-wider uppercase text-stone-900 leading-none my-1">
           The Prohibition Times
         </h1>
@@ -210,68 +145,116 @@ export default function ProhibitionTimes({ gameId, currentSeason, onClose, isOve
         </div>
       </div>
 
-      {/* Body */}
-      <div className="px-4 py-3 flex gap-3">
+      {/* Story content */}
+      <div className="flex-1 overflow-y-auto px-6 py-5">
+        {story ? (
+          <div className="max-w-2xl mx-auto">
+            {/* Section label */}
+            <p className="font-serif text-xs font-black uppercase tracking-[0.3em] text-stone-500 mb-3 border-b border-stone-300 pb-1">
+              {TYPE_LABEL[story.type] ?? story.type}
+            </p>
 
-        {/* Main columns — left 2/3 */}
-        <div className="flex-1 min-w-0">
+            {/* Image */}
+            {story.imageUrl && (
+              <img
+                src={story.imageUrl}
+                alt={story.headline}
+                className="w-full max-h-64 object-cover mb-4"
+                style={{ filter: 'sepia(1) contrast(0.85) brightness(0.88)' }}
+                referrerPolicy="no-referrer"
+                onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
+              />
+            )}
 
-          {/* Banner */}
-          {edition.banner && <BannerStory story={edition.banner} />}
+            {/* Published date */}
+            {story.publishedDate && (
+              <p className="font-serif text-xs text-stone-500 mb-2 italic">{story.publishedDate}</p>
+            )}
 
-          {/* Two feature columns */}
-          {edition.features.length > 0 && (
-            <div className="grid grid-cols-2 gap-3 mb-2">
-              {edition.features.map(s => <FeatureStory key={s.id} story={s} />)}
-            </div>
-          )}
+            {/* Headline */}
+            <h2 className="font-serif text-2xl font-black leading-tight uppercase tracking-wide text-stone-900 mb-2">
+              {story.headline}
+            </h2>
 
-          {/* Local Dispatches — game events + briefs */}
-          {(edition.gameEvents.length > 0 || edition.briefs.length > 0) && (
-            <div className="border-t-2 border-stone-700 pt-2">
-              <p className="font-serif text-xs font-black uppercase tracking-widest text-stone-700 mb-2 text-center border-b border-stone-500 pb-1">
-                Local Dispatches
+            {/* Subheadline */}
+            {story.subheadline && (
+              <p className="font-serif text-base italic text-stone-700 mb-3 border-b border-stone-300 pb-3">
+                {story.subheadline}
               </p>
-              <div className="space-y-0">
-                {edition.gameEvents.map(s => <BriefStory key={s.id} story={s} />)}
-                {edition.briefs.map(s => <BriefStory key={s.id} story={s} />)}
+            )}
+
+            {/* Author pull-out (opinion pieces) */}
+            {story.author && (
+              <div className="flex items-start gap-3 mb-4 pb-4 border-b-2 border-double border-stone-400">
+                {story.authorImageUrl && (
+                  <img
+                    src={story.authorImageUrl}
+                    alt={story.author}
+                    className="w-16 h-16 object-cover flex-shrink-0 rounded-sm"
+                    style={{ filter: 'sepia(0.9) contrast(0.9) brightness(0.92)' }}
+                    onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
+                  />
+                )}
+                <div className="flex flex-col justify-center">
+                  <p className="font-serif text-xs font-black uppercase tracking-widest text-stone-500 mb-0.5">By the Author</p>
+                  <p className="font-serif text-sm font-bold text-stone-800 leading-snug">{story.author}</p>
+                </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
 
-        {/* Right rail — ads + opinion */}
-        <div className="w-36 flex-shrink-0 border-l border-stone-600 pl-3">
-          <p className="font-serif text-xs font-black uppercase tracking-widest text-stone-600 mb-2 text-center">
-            Notices
-          </p>
-          {edition.ads.map(s => <AdBox key={s.id} story={s} />)}
-          {edition.opinion && (
-            <OpinionBox story={edition.opinion} />
-          )}
-        </div>
+            {/* Body */}
+            <p className="text-sm leading-relaxed text-stone-800 font-serif">{story.body}</p>
 
+            {/* Source link */}
+            {story.sourceUrl && (
+              <a
+                href={story.sourceUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-stone-500 hover:text-stone-700 underline mt-3 inline-block"
+              >
+                Read more →
+              </a>
+            )}
+          </div>
+        ) : (
+          <p className="text-center text-stone-500 font-serif italic mt-8">No stories today.</p>
+        )}
       </div>
 
-      {/* Footer rule */}
-      <div className="border-t-2 border-double border-stone-700 px-4 py-1.5 text-center">
-        <p className="text-xs font-serif text-stone-500 italic">
-          "All the news that's fit to distill" · {month} {year}
+      {/* Navigation footer */}
+      <div className="flex-shrink-0 border-t-2 border-double border-stone-700 px-4 py-2 flex items-center justify-between bg-amber-50/80">
+        <button
+          onClick={prev}
+          disabled={total <= 1}
+          className="font-serif text-sm text-stone-600 hover:text-stone-900 font-bold px-3 py-1 border border-stone-400 hover:border-stone-700 transition-colors disabled:opacity-30 disabled:cursor-default cursor-pointer"
+        >
+          ← Prev
+        </button>
+        <p className="text-xs font-serif text-stone-500 italic text-center">
+          {total > 0 ? `${storyIndex + 1} of ${total}` : '—'} · "All the news that's fit to distill"
         </p>
+        <button
+          onClick={next}
+          disabled={total <= 1}
+          className="font-serif text-sm text-stone-600 hover:text-stone-900 font-bold px-3 py-1 border border-stone-400 hover:border-stone-700 transition-colors disabled:opacity-30 disabled:cursor-default cursor-pointer"
+        >
+          Next →
+        </button>
       </div>
     </div>
   )
 
   if (isOverlay) {
     return (
-      <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto py-6 px-4">
+      <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
         <div className="absolute inset-0 bg-black/60" onClick={onClose} />
-        <div className="relative w-full max-w-2xl">
-          {content}
+        <div className="relative w-full max-w-2xl" style={{ height: '80vh' }}>
+          {inner}
         </div>
       </div>
     )
   }
 
-  return content
+  return <div style={{ height: '100%' }}>{inner}</div>
 }
