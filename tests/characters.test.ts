@@ -5,7 +5,6 @@ import {
   applyHeatModifier,
   applyProductionModifier,
   applyMovementModifier,
-  applyDoublerossModifier,
   applyBribeDuration,
   applyUpgradeCostModifier,
   applyTakeoverCostModifier,
@@ -68,8 +67,8 @@ describe('Hillbilly modifiers', () => {
 })
 
 describe('Gangster modifiers', () => {
-  it('+15% double cross success rate', () => {
-    expect(applyDoublerossModifier('gangster', 0.5)).toBeCloseTo(0.65)
+  it('claims cities 25% cheaper (takeover cost modifier)', () => {
+    expect(applyTakeoverCostModifier('gangster', 1000)).toBeCloseTo(750)
   })
 })
 
@@ -101,14 +100,14 @@ describe('Bootlegger (Clyde) modifiers', () => {
 })
 
 describe('Socialite (Eleanor) modifiers', () => {
-  it('+15% sell price anywhere', () => {
-    expect(applySellPriceModifier('socialite', 100)).toBeCloseTo(115)
+  it('+25% sell price anywhere', () => {
+    expect(applySellPriceModifier('socialite', 100)).toBeCloseTo(125)
   })
 })
 
 describe('Union Leader (Big Mike) modifiers', () => {
-  it('+20% double cross in large city', () => {
-    expect(applyDoublerossModifier('union_leader', 0.5)).toBeCloseTo(0.7)
+  it('+20% production from all stills', () => {
+    expect(applyProductionModifier('union_leader', 100)).toBeCloseTo(120)
   })
 })
 

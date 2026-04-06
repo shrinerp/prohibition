@@ -9,6 +9,7 @@
   // everything else falls through to index.html (SPA routing).
   "assets": {
     "directory": "./dist/frontend",
+    "binding": "ASSETS",
     "not_found_handling": "single-page-application"
   },
 
@@ -18,5 +19,16 @@
       "database_name": "prohibition",
       "database_id": "e748512b-d1f4-423c-a7d2-29e7338a3389"
     }
-  ]
+  ],
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    }
+  },
+
+  // Cron: clean up stale games daily at 03:00 UTC
+  "triggers": {
+    "crons": ["0 3 * * *"]
+  }
 }

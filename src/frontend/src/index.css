@@ -1,1 +1,16 @@
 @import "tailwindcss";
+
+html, body, #root {
+  background-color: #1a0f00;
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overscroll-behavior: none;   /* disable pull-to-refresh & bounce on iOS/Android */
+  touch-action: pan-x pan-y;   /* allow panning but block browser gesture takeover */
+}
+
+@media (orientation: portrait) and (max-width: 1024px) {
+  .portrait-blocker {
+    display: flex !important;
+  }
+}

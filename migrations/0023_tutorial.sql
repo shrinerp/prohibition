@@ -1,0 +1,1 @@
+ALTER TABLE game_players ADD COLUMN tutorial_seen INTEGER NOT NULL DEFAULT 0;

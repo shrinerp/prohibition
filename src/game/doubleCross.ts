@@ -1,5 +1,3 @@
-import { applyDoublerossModifier, getCharacter } from './characters'
-
 export type CityTier = 'small' | 'medium' | 'large' | 'major'
 
 export interface DoubleCrossTarget {
@@ -22,25 +20,12 @@ export interface DoubleCrossResult {
 
 const BASE_SUCCESS_RATE = 0.5
 
-/** Large/major city tiers where Union Leader bonus applies */
-const LARGE_TIERS = new Set<CityTier>(['large', 'major'])
-
 /**
  * Calculate the aggressor's success rate for a Double Cross.
- * Gangster: +15%. Union Leader (Big Mike): +20% in large/major cities.
  * Capped at 1.0.
  */
-export function calculateSuccessRate(aggressorClass: string, cityTier: CityTier): number {
-  let rate = BASE_SUCCESS_RATE
-
-  // Union Leader bonus only applies in large/major cities
-  if (aggressorClass === 'union_leader' && LARGE_TIERS.has(cityTier)) {
-    rate = applyDoublerossModifier(aggressorClass, rate)
-  } else if (aggressorClass !== 'union_leader') {
-    rate = applyDoublerossModifier(aggressorClass, rate)
-  }
-
-  return Math.min(1.0, rate)
+export function calculateSuccessRate(_aggressorClass: string, _cityTier: CityTier): number {
+  return BASE_SUCCESS_RATE
 }
 
 /**
@@ -70,11 +55,8 @@ export function resolveDoubleCross(
     }
   }
 
-  const victimChar = getCharacter(target.characterClass)
-  const cashLossMultiplier = victimChar?.modifiers.cashLossOnRobMultiplier ?? 1.0
-
   if (success) {
-    const cashGain    = Math.floor(target.cash * 0.2 * cashLossMultiplier)
+    const cashGain    = Math.floor(target.cash * 0.2)
     const alcoholGain = Math.floor(target.alcoholUnits * 0.5)
     return {
       allowed:             true,

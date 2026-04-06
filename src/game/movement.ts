@@ -7,30 +7,37 @@ export interface Vehicle {
   cargoSlots: number
 }
 
+export const VEHICLE_PRICES: Record<string, number> = {
+  workhorse:      300,
+  roadster:       500,
+  truck:          700,
+  whiskey_runner: 900,
+}
+
 export const VEHICLES: Record<string, Vehicle> = {
   roadster: {
     id: 'roadster',
     name: 'Roadster',
     movementMultiplier: 1.2,
-    cargoSlots: 5
+    cargoSlots: 10
   },
   truck: {
     id: 'truck',
     name: 'Truck',
     movementMultiplier: 0.8,
-    cargoSlots: 14
+    cargoSlots: 28
   },
   workhorse: {
     id: 'workhorse',
     name: 'Workhorse (Model T)',
     movementMultiplier: 1.0,
-    cargoSlots: 8
+    cargoSlots: 16
   },
   whiskey_runner: {
     id: 'whiskey_runner',
     name: 'Whiskey Runner (Motorcycle)',
     movementMultiplier: 1.5,
-    cargoSlots: 3
+    cargoSlots: 6
   }
 }
 

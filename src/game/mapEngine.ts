@@ -162,15 +162,40 @@ export function generateRoads(cities: CityNode[]): Road[] {
     }
   }
 
-  // Connectivity pass: if any city has no roads, connect it to its nearest neighbour
-  const connected = new Set<number>()
-  for (const r of roads) { connected.add(r.fromCityId); connected.add(r.toCityId) }
+  // Connectivity repair: BFS from the first city to find the reachable set,
+  // then connect every unreachable city to its nearest reachable city in turn.
+  // Adding each isolated city to the reachable set as we go handles multiple
+  // disconnected components in a single linear pass.
+  const cityById = new Map(cities.map(c => [c.id, c]))
+
+  const roadAdj = new Map<number, Set<number>>()
+  for (const c of cities) roadAdj.set(c.id, new Set())
+  for (const r of roads) {
+    roadAdj.get(r.fromCityId)?.add(r.toCityId)
+    roadAdj.get(r.toCityId)?.add(r.fromCityId)
+  }
+
+  const reachable = new Set<number>()
+  const bfsQ = [cities[0].id]
+  while (bfsQ.length > 0) {
+    const cur = bfsQ.shift()!
+    if (reachable.has(cur)) continue
+    reachable.add(cur)
+    for (const nb of roadAdj.get(cur) ?? []) bfsQ.push(nb)
+  }
+
   for (const city of cities) {
-    if (!connected.has(city.id)) {
-      const nearest = cities
-        .filter(c => c.id !== city.id)
-        .sort((a, b) => geoDist(city, a) - geoDist(city, b))[0]
-      if (nearest) addRoad(city, nearest)
+    if (reachable.has(city.id)) continue
+    // Find nearest already-reachable city
+    let bestCity: CityNode | null = null
+    let bestDist = Infinity
+    for (const id of reachable) {
+      const d = geoDist(city, cityById.get(id)!)
+      if (d < bestDist) { bestDist = d; bestCity = cityById.get(id)! }
+    }
+    if (bestCity) {
+      addRoad(city, bestCity)
+      reachable.add(city.id)   // now reachable — subsequent orphans can connect here
     }
   }
 

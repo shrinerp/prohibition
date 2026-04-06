@@ -7,12 +7,10 @@ export interface CharacterModifiers {
   productionMultiplier: number     // multiplied against seasonal output
   upgradeCostMultiplier: number    // multiplied against distillery upgrade cost
   takeoverCostMultiplier: number   // multiplied against hostile takeover price
-  doubleCrossBonus: number         // flat additive to double cross success rate
   bribeBaseDuration: number        // seasons a long-term bribe lasts
   sellPriceMultiplier: number      // multiplied against sell price in any city
   coastalProductionMultiplier: number  // production multiplier for owned coastal cities
   medicinalPriceMultiplier: number // sell price for Medicinal Spirits (Pharmacist only)
-  cashLossOnRobMultiplier: number  // multiplied against cash lost when robbed
 }
 
 const DEFAULT_MODIFIERS: CharacterModifiers = {
@@ -24,12 +22,10 @@ const DEFAULT_MODIFIERS: CharacterModifiers = {
   productionMultiplier: 1.0,
   upgradeCostMultiplier: 1.0,
   takeoverCostMultiplier: 1.0,
-  doubleCrossBonus: 0,
   bribeBaseDuration: 4,
   sellPriceMultiplier: 1.0,
   coastalProductionMultiplier: 1.0,
   medicinalPriceMultiplier: 1.0,
-  cashLossOnRobMultiplier: 1.0
 }
 
 export interface CharacterClass {
@@ -58,9 +54,9 @@ export const CHARACTER_CLASSES: Record<string, CharacterClass> = {
   gangster: {
     id: 'gangster',
     name: 'The Gangster',
-    perk: '+15% Double Cross success rate',
-    drawback: '+20% Heat when in owned cities',
-    modifiers: { ...DEFAULT_MODIFIERS, doubleCrossBonus: 0.15 }
+    perk: 'Claim cities 25% cheaper',
+    drawback: '+20% Police Heat generation',
+    modifiers: { ...DEFAULT_MODIFIERS, takeoverCostMultiplier: 0.75, heatMultiplier: 1.2 }
   },
   vixen: {
     id: 'vixen',
@@ -72,44 +68,44 @@ export const CHARACTER_CLASSES: Record<string, CharacterClass> = {
   pharmacist: {
     id: 'pharmacist',
     name: 'The Pharmacist',
-    perk: 'Sell Medicinal Spirits at 1.5× base price',
+    perk: 'Sell whiskey at +50% market value (medicinal prescription)',
     drawback: 'Hostile Takeover costs +25%',
     modifiers: { ...DEFAULT_MODIFIERS, takeoverCostMultiplier: 1.25, medicinalPriceMultiplier: 1.5 }
   },
   jazz_singer: {
     id: 'jazz_singer',
     name: 'The Jazz Singer',
-    perk: 'Passive income in cities with population > 50k',
-    drawback: 'Higher cash loss when robbed',
-    modifiers: { ...DEFAULT_MODIFIERS, cashLossOnRobMultiplier: 1.35 }
+    perk: 'Passive income each season in owned large/major cities',
+    drawback: '+15% Police Heat generation',
+    modifiers: { ...DEFAULT_MODIFIERS, heatMultiplier: 1.15 }
   },
   bootlegger: {
     id: 'bootlegger',
     name: 'The Bootlegger (Clyde)',
     perk: 'All dice rolls get a permanent +2 bonus',
-    drawback: 'None',
-    modifiers: { ...DEFAULT_MODIFIERS, movementBonus: 2 }
+    drawback: '+20% Police Heat generation',
+    modifiers: { ...DEFAULT_MODIFIERS, movementBonus: 2, heatMultiplier: 1.2 }
   },
   socialite: {
     id: 'socialite',
     name: 'The Socialite (Eleanor)',
-    perk: 'Sell alcohol in any city at +15% market value',
-    drawback: 'None',
-    modifiers: { ...DEFAULT_MODIFIERS, sellPriceMultiplier: 1.15 }
+    perk: 'Sell alcohol in any city at +25% market value',
+    drawback: '-20% Alcohol production from all stills',
+    modifiers: { ...DEFAULT_MODIFIERS, sellPriceMultiplier: 1.25, productionMultiplier: 0.8 }
   },
   union_leader: {
     id: 'union_leader',
     name: 'The Union Leader (Big Mike)',
-    perk: '+20% Double Cross success in Large Cities',
-    drawback: 'None',
-    modifiers: { ...DEFAULT_MODIFIERS, doubleCrossBonus: 0.2 }
+    perk: '+20% Alcohol production from all stills',
+    drawback: 'Hostile Takeovers cost +20%',
+    modifiers: { ...DEFAULT_MODIFIERS, productionMultiplier: 1.2, takeoverCostMultiplier: 1.2 }
   },
   rum_runner: {
     id: 'rum_runner',
     name: 'The Rum-Runner (Captain Morgan)',
     perk: 'Owned coastal cities produce double volume',
-    drawback: 'None',
-    modifiers: { ...DEFAULT_MODIFIERS, coastalProductionMultiplier: 2.0 }
+    drawback: '-15% Sell price everywhere (sells wholesale)',
+    modifiers: { ...DEFAULT_MODIFIERS, coastalProductionMultiplier: 2.0, sellPriceMultiplier: 0.85 }
   }
 }
 
@@ -120,6 +116,12 @@ export function getCharacter(id: string): CharacterClass | null {
 }
 
 // Modifier application helpers
+
+export function applyCargoMultiplier(classId: string, baseSlots: number): number {
+  const char = getCharacter(classId)
+  if (!char) return baseSlots
+  return Math.floor(baseSlots * char.modifiers.cargoMultiplier)
+}
 
 export function applyHeatModifier(classId: string, baseHeat: number): number {
   const char = getCharacter(classId)
@@ -137,12 +139,6 @@ export function applyMovementModifier(classId: string, roll: number): number {
   const char = getCharacter(classId)
   if (!char) return roll
   return Math.floor(roll * char.modifiers.movementMultiplier) + char.modifiers.movementBonus
-}
-
-export function applyDoublerossModifier(classId: string, baseRate: number): number {
-  const char = getCharacter(classId)
-  if (!char) return baseRate
-  return baseRate + char.modifiers.doubleCrossBonus
 }
 
 export function applyBribeDuration(classId: string, _baseDuration: number): number {

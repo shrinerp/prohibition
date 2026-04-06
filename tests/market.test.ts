@@ -68,8 +68,8 @@ describe('applySellModifier()', () => {
     expect(applySellModifier(100, 'bootlegger', 'bourbon')).toBe(100)
   })
 
-  it('applies Socialite +15% sell bonus', () => {
-    expect(applySellModifier(100, 'socialite', 'bourbon')).toBeCloseTo(115)
+  it('applies Socialite +25% sell bonus', () => {
+    expect(applySellModifier(100, 'socialite', 'bourbon')).toBeCloseTo(125)
   })
 
   it('applies Pharmacist 1.5× for medicinal spirits (moonshine)', () => {

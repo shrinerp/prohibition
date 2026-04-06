@@ -27,21 +27,28 @@
     "@types/bcryptjs": "^2.4.6",
     "@types/react-dom": "^19.2.3",
     "@types/react-router-dom": "^5.3.3",
+    "@types/topojson-client": "^3.1.5",
     "@vitejs/plugin-react": "^5.1.4",
     "autoprefixer": "^10.4.27",
     "tailwindcss": "^4.2.1",
     "typescript": "^5.9.3",
     "vite": "^7.3.1",
+    "vite-plugin-pwa": "^1.2.0",
     "vitest": "^3.2.4",
     "wrangler": "^4.71.0"
   },
   "dependencies": {
+    "@block65/webcrypto-web-push": "^1.0.2",
     "@tailwindcss/vite": "^4.2.1",
     "bcryptjs": "^3.0.3",
+    "d3-geo": "^3.1.1",
     "hono": "^4.12.5",
     "phaser": "^3.90.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "react-router-dom": "^7.13.1"
+    "react-router-dom": "^7.13.1",
+    "react-zoom-pan-pinch": "^3.7.0",
+    "topojson-client": "^3.1.0",
+    "us-atlas": "^3.0.1"
   }
 }

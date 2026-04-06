@@ -4,14 +4,15 @@ interface JailOverlayProps {
   seasonsRemaining: number
   hasLawyerPerk: boolean
   onPayLawyer: () => void
+  characterClass?: string
 }
 
 export default function JailOverlay({ seasonsRemaining, hasLawyerPerk, onPayLawyer }: JailOverlayProps) {
   return (
-    <div className="absolute inset-0 bg-stone-900/90 flex flex-col items-center justify-center z-10 rounded">
-      <div className="text-6xl mb-4">🔒</div>
-      <h3 className="text-2xl font-bold text-red-400 mb-2">Behind Bars</h3>
-      <p className="text-stone-300 mb-6">
+    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center"
+      style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(1px)' }}>
+      <h3 className="text-3xl font-bold text-red-400 mb-2 drop-shadow-lg">Behind Bars</h3>
+      <p className="text-stone-300 text-sm mb-6">
         {seasonsRemaining} season{seasonsRemaining !== 1 ? 's' : ''} remaining
       </p>
       {hasLawyerPerk && (
