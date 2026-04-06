@@ -2490,6 +2490,7 @@ export default function GamePage() {
           currentSeason={game?.currentSeason ?? 1}
           isOverlay
           onClose={() => setShowPaper(false)}
+          onMaximize={!serverIsMyTurn ? () => { setNewsDeclined(false); setShowPaper(false) } : undefined}
         />
       )}
       {/* Mission Panel overlay */}
