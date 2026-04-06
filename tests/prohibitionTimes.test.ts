@@ -181,3 +181,24 @@ describe('ProhibitionTimes close button visibility condition', () => {
     expect(shouldShowClose(true, () => {})).toBe(true)
   })
 })
+
+describe('ProhibitionTimes maximize button visibility condition', () => {
+  const shouldShowMaximize = (isOverlay: boolean, onMaximize: (() => void) | undefined) =>
+    isOverlay && !!onMaximize
+
+  it('shows maximize button when isOverlay and onMaximize are both provided', () => {
+    expect(shouldShowMaximize(true, () => {})).toBe(true)
+  })
+
+  it('hides maximize button when not in overlay mode', () => {
+    expect(shouldShowMaximize(false, () => {})).toBe(false)
+  })
+
+  it('hides maximize button when onMaximize is not provided (active turn)', () => {
+    expect(shouldShowMaximize(true, undefined)).toBe(false)
+  })
+
+  it('hides maximize button when neither isOverlay nor onMaximize provided', () => {
+    expect(shouldShowMaximize(false, undefined)).toBe(false)
+  })
+})

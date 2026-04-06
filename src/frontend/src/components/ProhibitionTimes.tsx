@@ -12,6 +12,7 @@ interface ProhibitionTimesProps {
   currentSeason: number
   onClose?: () => void
   isOverlay?: boolean
+  onMaximize?: () => void
 }
 
 // Deterministic shuffle seeded by season so the page stays stable during a turn
@@ -46,7 +47,7 @@ const TYPE_LABEL: Record<string, string> = {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function ProhibitionTimes({ gameId, currentSeason, onClose, isOverlay }: ProhibitionTimesProps) {
+export default function ProhibitionTimes({ gameId, currentSeason, onClose, isOverlay, onMaximize }: ProhibitionTimesProps) {
   const [systemMessages, setSystemMessages] = useState<GameMessage[]>([])
   const hasFetched = useRef(false)
   const [storyIndex, setStoryIndex] = useState(0)
@@ -131,6 +132,13 @@ export default function ProhibitionTimes({ gameId, currentSeason, onClose, isOve
             className="absolute top-3 right-4 text-stone-600 hover:text-stone-900 text-xl font-bold leading-none cursor-pointer"
             aria-label="Close newspaper"
           >✕</button>
+        )}
+        {isOverlay && onMaximize && (
+          <button
+            onClick={onMaximize}
+            className="absolute top-3 left-4 text-stone-600 hover:text-stone-900 text-xl font-bold leading-none cursor-pointer"
+            aria-label="Maximize newspaper"
+          >⛶</button>
         )}
         <p className="text-xs tracking-[0.3em] uppercase text-stone-600 font-serif border-b border-stone-700 mb-1 pb-1">
           Est. 1920 · Chicago, Ill.
