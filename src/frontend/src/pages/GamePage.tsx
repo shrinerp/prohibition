@@ -341,6 +341,8 @@ export default function GamePage() {
   const missionIdsBeforeDrawRef = useRef<Set<number> | null>(null)
   const [welcomeOpen, setWelcomeOpen] = useState(false)
   const [tutorialOpen, setTutorialOpen] = useState(false)
+  const [showNewsPrompt, setShowNewsPrompt] = useState(false)
+  const [newsDeclined, setNewsDeclined] = useState(false)
   const [mapMode, setMapMode] = useState<'normal' | 'simple' | 'info'>('normal')
   const [infoCityId, setInfoCityId] = useState<number | null>(null)
   const [characterPopup, setCharacterPopup] = useState<{ name: string; perk: string; drawback: string } | null>(null)
@@ -549,6 +551,11 @@ export default function GamePage() {
     }
   }, [player?.id])
   const isMyTurn = !turnPending && serverIsMyTurn
+
+  // Reset the first-turn newspaper decline once it becomes the player's turn
+  useEffect(() => {
+    if (serverIsMyTurn) setNewsDeclined(false)
+  }, [serverIsMyTurn])
 
   // Show "Your Turn" only when currentPlayerIndex genuinely transitions FROM another
   // player's index TO ours — not when it stays on ours (NPC auto-skip loop) and not
@@ -1330,7 +1337,13 @@ export default function GamePage() {
         )}
       </div>
 
-      <div className="flex flex-1 overflow-hidden min-h-0">
+      <div className="flex flex-1 overflow-hidden min-h-0 relative">
+        {/* Prohibition Times — full-area overlay when waiting for another player's turn */}
+        {!serverIsMyTurn && !turnPending && !isInJail && game?.status === 'active' && player?.tutorialSeen && !showNewsPrompt && !newsDeclined && (
+          <div className="absolute inset-0 z-30 overflow-hidden">
+            <ProhibitionTimes gameId={gameId!} currentSeason={game.currentSeason} onClose={() => setNewsDeclined(true)} />
+          </div>
+        )}
         {/* Left sidebar */}
         <div data-tutorial="player_panel" className={`${leftOpen ? 'w-60' : 'w-8'} bg-stone-900 border-r border-stone-700 flex-shrink-0 transition-all duration-200 overflow-hidden relative flex flex-col`}>
           {/* Collapse toggle */}
@@ -2290,7 +2303,7 @@ export default function GamePage() {
               <p className="text-xs text-stone-600 italic">Your turns advance automatically while jailed.</p>
             </div>
           ) : (
-            <ProhibitionTimes gameId={gameId!} currentSeason={game?.currentSeason ?? 1} />
+            <p className="text-stone-500 text-sm italic">Waiting for {currentPlayerName}</p>
           )}
 
           {/* City info */}
@@ -2417,6 +2430,7 @@ export default function GamePage() {
           onBeginTour={() => { setWelcomeOpen(false); setTutorialOpen(true) }}
           onSkip={async () => {
             setWelcomeOpen(false)
+            if (!serverIsMyTurn) setShowNewsPrompt(true)
             await fetch(`/api/games/${gameId}/tutorial-done`, { method: 'POST' })
             fetchAll()
           }}
@@ -2431,8 +2445,43 @@ export default function GamePage() {
             if (action === 'open_market') setMarketOpen(true)
             if (action === 'close_market') setMarketOpen(false)
           }}
-          onDone={() => { setTutorialOpen(false); setMarketOpen(false); fetchAll() }}
+          onDone={() => {
+            setTutorialOpen(false)
+            setMarketOpen(false)
+            if (!serverIsMyTurn) setShowNewsPrompt(true)
+            fetchAll()
+          }}
         />
+      )}
+
+      {/* First-turn newspaper prompt — shown after FTUX when waiting for first turn */}
+      {showNewsPrompt && (
+        <div className="fixed inset-0 z-[99970] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/70" />
+          <div className="relative w-full max-w-sm bg-stone-900 border border-amber-700/60 rounded-2xl shadow-2xl overflow-hidden p-6 text-center"
+            style={{ boxShadow: '0 0 60px rgba(180,120,20,0.2), 0 20px 50px rgba(0,0,0,0.6)' }}>
+            <p className="text-amber-500/80 text-xs uppercase tracking-[0.25em] font-bold mb-2">Waiting for your first turn</p>
+            <h2 className="text-amber-300 font-black text-lg mb-3">Read The Prohibition Times?</h2>
+            <p className="text-stone-400 text-sm mb-6 leading-relaxed">
+              Catch up on era news, local dispatches, and period ads while the other players take their turn.
+            </p>
+            <div className="flex gap-3 justify-center">
+              <button
+                onClick={() => { setShowNewsPrompt(false); setNewsDeclined(true) }}
+                className="px-4 py-2 text-sm text-stone-500 hover:text-stone-300 border border-stone-700 hover:border-stone-500 rounded-lg transition"
+              >
+                Skip for now
+              </button>
+              <button
+                onClick={() => setShowNewsPrompt(false)}
+                className="px-5 py-2 bg-amber-600 hover:bg-amber-500 text-stone-900 font-black text-sm rounded-lg uppercase tracking-wider transition"
+                style={{ boxShadow: '0 0 16px rgba(217,119,6,0.35)' }}
+              >
+                Read the Paper →
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       {/* Prohibition Times overlay */}
       {showPaper && (
