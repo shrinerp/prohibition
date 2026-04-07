@@ -14,6 +14,9 @@ interface PlayerNetWorth {
     cities: number
   }
   total: number
+  missionsCompleted?: number
+  missionsFailed?: number
+  missionPenalty?: number
 }
 
 const PLACE_LABELS: Record<number, string> = { 1: '1ST', 2: '2ND', 3: '3RD', 4: '4TH', 5: '5TH' }
@@ -39,10 +42,27 @@ const RANK_STYLES: Record<number, { medal: string; ring: string; nameColor: stri
   3: { medal: '🥉', ring: 'border-orange-700', nameColor: 'text-orange-300' },
 }
 
+const SEASON_NAME_SETS: Record<number, string[]> = {
+  1: [],
+  2: ['Spring', 'Autumn'],
+  3: ['Spring', 'Summer', 'Autumn'],
+  4: ['Spring', 'Summer', 'Autumn', 'Winter'],
+}
+
+function getSeasonLabel(season: number, totalSeasons = 52): string {
+  const seasonsPerYear = totalSeasons / 13
+  const yearOffset  = Math.floor((season - 1) / seasonsPerYear)
+  const seasonIndex = Math.round((season - 1) % seasonsPerYear)
+  const names = SEASON_NAME_SETS[seasonsPerYear] ?? []
+  const seasonName = names[seasonIndex] ? `${names[seasonIndex]} ` : ''
+  return `${seasonName}${1921 + yearOffset}`
+}
+
 export default function EndGamePage() {
   const { id: gameId } = useParams<{ id: string }>()
   const [players, setPlayers] = useState<PlayerNetWorth[]>([])
   const [recap, setRecap] = useState<string | null>(null)
+  const [totalSeasons, setTotalSeasons] = useState(52)
   const [loading, setLoading] = useState(true)
   const [fetchError, setFetchError] = useState<string | null>(null)
 
@@ -64,7 +84,13 @@ export default function EndGamePage() {
         if (rc.success && rc.data?.recap) setRecap(rc.data.recap)
       })
       .catch(() => { /* recap optional */ })
-    Promise.all([nwFetch, rcFetch]).finally(() => setLoading(false))
+    const stateFetch = fetch(`/api/games/${gameId}/state`)
+      .then(r => r.json())
+      .then((s: { success: boolean; game?: { totalSeasons?: number } }) => {
+        if (s.success && s.game?.totalSeasons) setTotalSeasons(s.game.totalSeasons)
+      })
+      .catch(() => { /* fall back to 52 */ })
+    Promise.all([nwFetch, rcFetch, stateFetch]).finally(() => setLoading(false))
   }, [gameId])
 
   const me = players.find(p => p.isYou)
@@ -90,7 +116,7 @@ export default function EndGamePage() {
           <h1 className="text-5xl font-black uppercase tracking-widest text-amber-400">
             Prohibition Ends
           </h1>
-          <p className="text-stone-400 text-lg">Winter 1933 — The 21st Amendment has passed.</p>
+          <p className="text-stone-400 text-lg">{getSeasonLabel(totalSeasons, totalSeasons)} — The 21st Amendment has passed.</p>
 
           {/* Your placement */}
           {me && myRank && (
@@ -171,6 +197,18 @@ export default function EndGamePage() {
                       </div>
                     ))}
                   </div>
+
+                  {/* Mission summary */}
+                  {((p.missionsCompleted ?? 0) + (p.missionsFailed ?? 0)) > 0 && (
+                    <div className="mt-2 text-xs flex gap-4">
+                      <span className="text-green-600">✦ {p.missionsCompleted ?? 0} missions complete</span>
+                      {(p.missionsFailed ?? 0) > 0 && (
+                        <span className="text-red-500">
+                          ✦ {p.missionsFailed} failed (−${(p.missionPenalty ?? 0).toLocaleString()} deducted)
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               )
             })}
@@ -190,13 +228,19 @@ export default function EndGamePage() {
         )}
 
         {/* Back */}
-        <div className="text-center pb-8">
+        <div className="text-center pb-8 flex items-center justify-center gap-4">
           <Link
             to="/games"
             className="inline-block px-8 py-3 bg-amber-700 hover:bg-amber-600 text-amber-100 font-bold rounded uppercase tracking-wide transition"
           >
             ← Back to Games
           </Link>
+          <button
+            onClick={() => navigator.clipboard.writeText(`${window.location.origin}/results/${gameId}`)}
+            className="px-4 py-2 bg-stone-700 hover:bg-stone-600 text-stone-300 text-sm rounded transition"
+          >
+            Share Results →
+          </button>
         </div>
 
       </div>

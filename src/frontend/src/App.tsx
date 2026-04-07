@@ -7,6 +7,8 @@ import GamesPage   from './pages/GamesPage'
 import GamePage    from './pages/GamePage'
 import EndGamePage from './pages/EndGamePage'
 import AdminPage   from './pages/AdminPage'
+import HowToPlayPage from './pages/HowToPlayPage'
+import ShamePage from './pages/ShamePage'
 
 export default function App() {
   return (
@@ -20,6 +22,9 @@ export default function App() {
           <Route path="/games/:id"   element={<GamePage />} />
           <Route path="/games/:id/end" element={<EndGamePage />} />
           <Route path="/admin"       element={<AdminPage />} />
+          <Route path="/how-to-play" element={<HowToPlayPage />} />
+          <Route path="/results/:gameId" element={<ShamePage />} />
+          <Route path="/shame"       element={<ShamePage />} />
           <Route path="*"            element={<Navigate to="/" replace />} />
         </Routes>
       </div>

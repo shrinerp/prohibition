@@ -14,6 +14,15 @@ export interface Env {
   VAPID_PRIVATE_KEY: string
   VAPID_SUBJECT: string
   ASSETS: { fetch: (req: Request) => Promise<Response> }
+  EMAIL: {
+    send: (options: {
+      to: string
+      from: string
+      subject: string
+      html?: string
+      text?: string
+    }) => Promise<{ messageId: string }>
+  }
 }
 
 const app = new Hono<{ Bindings: Env }>()
@@ -55,6 +64,34 @@ Senders LLC, 2026
 )
 
 app.route('/auth', authRouter)
+
+app.get('/api/public/results/:gameId', async (c) => {
+  const { results } = await c.env.PROHIBITIONDB.prepare(
+    `SELECT le.player_name, le.character_class, le.rank, le.net_worth,
+            le.failed_missions, le.seasons_jailed, le.total_seasons, le.ended_at,
+            g.game_name
+     FROM leaderboard_entries le
+     JOIN games g ON le.game_id = g.id
+     WHERE le.game_id = ?
+     ORDER BY le.rank ASC`
+  ).bind(c.req.param('gameId')).all()
+  if (!results.length) return c.json({ success: false, message: 'Not found' }, 404)
+  return c.json({ success: true, data: { gameId: c.req.param('gameId'), players: results } })
+})
+
+app.get('/api/public/shame', async (c) => {
+  const { results } = await c.env.PROHIBITIONDB.prepare(
+    `SELECT le.game_id, le.player_name, le.character_class, le.rank,
+            le.net_worth, le.failed_missions, le.seasons_jailed,
+            le.total_seasons, le.ended_at, g.game_name
+     FROM leaderboard_entries le
+     JOIN games g ON le.game_id = g.id
+     WHERE le.ended_at > datetime('now', '-30 days')
+     ORDER BY le.ended_at DESC, le.rank ASC`
+  ).all()
+  return c.json({ success: true, data: { entries: results } })
+})
+
 app.route('/api/games', gamesRouter)
 app.route('/api/admin', adminRouter)
 app.route('/api/push', pushRouter)
