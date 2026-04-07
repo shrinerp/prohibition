@@ -238,7 +238,7 @@ function ShameListView() {
                 <span className="text-stone-600 text-sm tabular-nums w-6 text-right flex-shrink-0">#{i + 1}</span>
                 <div className="flex-1 min-w-0">
                   <p className="font-bold text-stone-200 truncate">{e.player_name}</p>
-                  <p className="text-red-900 text-xs italic">{SHAME_TAGLINES[i % SHAME_TAGLINES.length]}</p>
+                  <p className="text-red-400 text-xs italic">{SHAME_TAGLINES[i % SHAME_TAGLINES.length]}</p>
                   <p className="text-stone-600 text-xs">{e.character_class} · {formatDate(e.ended_at)}</p>
                 </div>
                 <div className="flex items-center gap-3 flex-shrink-0">
