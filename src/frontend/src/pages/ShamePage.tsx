@@ -13,8 +13,14 @@ interface PublicPlayer {
   game_name: string | null
 }
 
-interface GameEntry extends PublicPlayer {
-  game_id: string
+interface ShameEntry {
+  player_name: string
+  character_class: string
+  net_worth: number
+  failed_missions: number
+  seasons_jailed: number
+  total_seasons: number
+  ended_at: string
 }
 
 const RANK_MEDAL: Record<number, string> = { 1: '🥇', 2: '🥈', 3: '🥉' }
@@ -150,36 +156,26 @@ function GameResultsView({ gameId }: { gameId: string }) {
   )
 }
 
+const SEASON_FILTERS = [13, 26, 52] as const
+type SeasonFilter = typeof SEASON_FILTERS[number]
+
 // ── Hall of Shame list view ──────────────────────────────────────────────────
 
 function ShameListView() {
-  const [entries, setEntries] = useState<GameEntry[]>([])
+  const [filter, setFilter] = useState<SeasonFilter>(52)
+  const [entries, setEntries] = useState<ShameEntry[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetch('/api/public/shame')
+    setLoading(true)
+    fetch(`/api/public/shame?seasons=${filter}`)
       .then(r => r.json())
-      .then((d: { success: boolean; data?: { entries: GameEntry[] } }) => {
+      .then((d: { success: boolean; data?: { entries: ShameEntry[] } }) => {
         if (d.success && d.data) setEntries(d.data.entries)
       })
       .catch(() => {})
       .finally(() => setLoading(false))
-  }, [])
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-stone-950">
-        <p className="text-amber-400 animate-pulse text-lg tracking-widest uppercase">Loading…</p>
-      </div>
-    )
-  }
-
-  // Group entries by game_id
-  const gameIds = [...new Set(entries.map(e => e.game_id))]
-  const gameGroups = gameIds.map(id => ({
-    gameId: id,
-    players: entries.filter(e => e.game_id === id),
-  }))
+  }, [filter])
 
   return (
     <div className="min-h-screen bg-stone-950 text-stone-100">
@@ -187,49 +183,61 @@ function ShameListView() {
         <div className="absolute inset-0 bg-gradient-to-b from-red-950/20 to-stone-950" />
         <div className="relative max-w-3xl mx-auto px-6 py-12 text-center space-y-2">
           <img src="/logo.png" alt="Prohibition" className="h-16 w-auto mx-auto mb-4 drop-shadow-2xl" />
-          <h1 className="text-4xl font-black uppercase tracking-widest text-amber-400">Hall of Shame</h1>
-          <p className="text-stone-500 text-sm">Recent games — no login required</p>
+          <h1 className="text-4xl font-black uppercase tracking-widest text-amber-400">Wall of Shame</h1>
+          <p className="text-stone-500 text-sm">Last-place finishers — no login required</p>
         </div>
       </div>
 
       <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
-        {gameGroups.length === 0 ? (
-          <p className="text-center text-stone-600 py-12">No completed games in the last 30 days.</p>
+        {/* Season filter tabs */}
+        <div className="flex gap-2">
+          {SEASON_FILTERS.map(s => (
+            <button
+              key={s}
+              onClick={() => setFilter(s)}
+              className={`px-4 py-1.5 text-sm font-semibold rounded transition cursor-pointer ${
+                filter === s
+                  ? 'bg-amber-500 text-stone-950'
+                  : 'bg-stone-800 text-stone-400 hover:bg-stone-700 hover:text-stone-200'
+              }`}
+            >
+              {s} seasons
+            </button>
+          ))}
+        </div>
+
+        {loading ? (
+          <p className="text-amber-400 animate-pulse text-center py-12 tracking-widest uppercase text-sm">Loading…</p>
+        ) : entries.length === 0 ? (
+          <p className="text-center text-stone-600 py-12">No completed {filter}-season games yet.</p>
         ) : (
-          gameGroups.map(({ gameId, players }) => {
-            const winner = players.find(p => p.rank === 1)
-            const gameName = players[0]?.game_name ?? 'Unnamed Game'
-            return (
-              <Link
-                key={gameId}
-                to={`/results/${gameId}`}
-                className="block bg-stone-900 border border-stone-700 hover:border-stone-500 rounded-xl p-4 transition"
+          <div className="space-y-2">
+            {entries.map((e, i) => (
+              <div
+                key={e.player_name + e.ended_at}
+                className="flex items-center gap-4 bg-stone-900 border border-stone-800 rounded-xl px-4 py-3"
               >
-                <div className="flex items-start justify-between mb-3">
-                  <div>
-                    <p className="font-bold text-stone-200">{gameName}</p>
-                    <p className="text-stone-600 text-xs mt-0.5">{formatDate(players[0].ended_at)} · {players[0].total_seasons} seasons</p>
-                  </div>
-                  <span className="text-stone-500 text-xs">View →</span>
+                <span className="text-stone-600 text-sm tabular-nums w-6 text-right flex-shrink-0">#{i + 1}</span>
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold text-stone-200 truncate">{e.player_name}</p>
+                  <p className="text-stone-600 text-xs">{e.character_class} · {formatDate(e.ended_at)}</p>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {players.map(p => (
-                    <div key={p.player_name + p.rank} className="flex items-center gap-1.5 text-xs">
-                      <span>{RANK_MEDAL[p.rank] ?? `#${p.rank}`}</span>
-                      <span className={p.rank === 1 ? 'text-amber-300 font-semibold' : 'text-stone-400'}>{p.player_name}</span>
-                      {p.failed_missions > 0 && <span className="text-red-600" title={`${p.failed_missions} failed missions`}>🃏</span>}
-                      {p.seasons_jailed > 0 && <span className="text-stone-600" title={`${p.seasons_jailed} seasons jailed`}>⛓️</span>}
-                    </div>
-                  ))}
+                <div className="flex items-center gap-3 flex-shrink-0">
+                  {e.failed_missions > 0 && (
+                    <span className="text-red-500 text-xs" title={`${e.failed_missions} failed missions`}>
+                      🃏 {e.failed_missions}
+                    </span>
+                  )}
+                  {e.seasons_jailed > 0 && (
+                    <span className="text-stone-500 text-xs" title={`${e.seasons_jailed} seasons jailed`}>
+                      ⛓️ {e.seasons_jailed}
+                    </span>
+                  )}
+                  <span className="text-red-400 font-black tabular-nums">${e.net_worth.toLocaleString()}</span>
                 </div>
-                {winner && (
-                  <p className="text-stone-600 text-xs mt-2">
-                    Winner: <span className="text-amber-500">{winner.player_name}</span> · ${winner.net_worth.toLocaleString()}
-                  </p>
-                )}
-              </Link>
-            )
-          })
+              </div>
+            ))}
+          </div>
         )}
 
         <div className="text-center pb-8">
