@@ -80,15 +80,16 @@ app.get('/api/public/results/:gameId', async (c) => {
 })
 
 app.get('/api/public/shame', async (c) => {
+  const seasons = parseInt(c.req.query('seasons') ?? '0', 10)
   const { results } = await c.env.PROHIBITIONDB.prepare(
-    `SELECT le.game_id, le.player_name, le.character_class, le.rank,
-            le.net_worth, le.failed_missions, le.seasons_jailed,
-            le.total_seasons, le.ended_at, g.game_name
+    `SELECT le.player_name, le.character_class, le.net_worth,
+            le.failed_missions, le.seasons_jailed, le.total_seasons, le.ended_at
      FROM leaderboard_entries le
-     JOIN games g ON le.game_id = g.id
-     WHERE le.ended_at > datetime('now', '-30 days')
-     ORDER BY le.ended_at DESC, le.rank ASC`
-  ).all()
+     WHERE le.rank = (SELECT MAX(rank) FROM leaderboard_entries le2 WHERE le2.game_id = le.game_id)
+       AND (? = 0 OR le.total_seasons = ?)
+     ORDER BY le.net_worth ASC
+     LIMIT 50`
+  ).bind(seasons, seasons).all()
   return c.json({ success: true, data: { entries: results } })
 })
 
