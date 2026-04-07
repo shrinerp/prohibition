@@ -159,6 +159,24 @@ function GameResultsView({ gameId }: { gameId: string }) {
 const SEASON_FILTERS = [13, 26, 52] as const
 type SeasonFilter = typeof SEASON_FILTERS[number]
 
+const SHAME_TAGLINES = [
+  'Worst player of all time.',
+  'Brings shame upon their family.',
+  'Should consider UNO.',
+  'Lost to NPCs. Multiple times.',
+  'The feds weren\'t even trying.',
+  'Reportedly still confused by the rules.',
+  'A cautionary tale.',
+  'Al Capone is embarrassed for them.',
+  'Their mother knows.',
+  'Finished last in a game with no last place. Impressive.',
+  'The only bootlegger to go broke during Prohibition.',
+  'Even the police felt bad.',
+  'Managed to lose money selling illegal alcohol.',
+  'A true pioneer of failure.',
+  'History will not be kind.',
+]
+
 // ── Hall of Shame list view ──────────────────────────────────────────────────
 
 function ShameListView() {
@@ -184,7 +202,7 @@ function ShameListView() {
         <div className="relative max-w-3xl mx-auto px-6 py-12 text-center space-y-2">
           <img src="/logo.png" alt="Prohibition" className="h-16 w-auto mx-auto mb-4 drop-shadow-2xl" />
           <h1 className="text-4xl font-black uppercase tracking-widest text-amber-400">Wall of Shame</h1>
-          <p className="text-stone-500 text-sm">Last-place finishers — no login required</p>
+          <p className="text-stone-500 text-sm">These people lost to NPCs. No login required.</p>
         </div>
       </div>
 
@@ -220,6 +238,7 @@ function ShameListView() {
                 <span className="text-stone-600 text-sm tabular-nums w-6 text-right flex-shrink-0">#{i + 1}</span>
                 <div className="flex-1 min-w-0">
                   <p className="font-bold text-stone-200 truncate">{e.player_name}</p>
+                  <p className="text-red-900 text-xs italic">{SHAME_TAGLINES[i % SHAME_TAGLINES.length]}</p>
                   <p className="text-stone-600 text-xs">{e.character_class} · {formatDate(e.ended_at)}</p>
                 </div>
                 <div className="flex items-center gap-3 flex-shrink-0">
