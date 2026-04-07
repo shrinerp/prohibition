@@ -66,7 +66,7 @@ function GameResultsView({ gameId }: { gameId: string }) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-stone-950 gap-4">
         <p className="text-stone-400">{error ?? 'No results found.'}</p>
-        <Link to="/shame" className="text-amber-500 hover:text-amber-400 text-sm underline">← Hall of Shame</Link>
+        <Link to="/shame" className="text-amber-500 hover:text-amber-400 text-sm underline">← Wall of Shame</Link>
       </div>
     )
   }
@@ -142,7 +142,7 @@ function GameResultsView({ gameId }: { gameId: string }) {
 
         <div className="flex items-center justify-center gap-4 pb-8">
           <Link to="/shame" className="px-6 py-2 bg-stone-800 hover:bg-stone-700 text-stone-300 text-sm rounded transition">
-            ← Hall of Shame
+            ← Wall of Shame
           </Link>
           <button
             onClick={handleCopy}
@@ -183,6 +183,11 @@ function ShameListView() {
   const [filter, setFilter] = useState<SeasonFilter>(52)
   const [entries, setEntries] = useState<ShameEntry[]>([])
   const [loading, setLoading] = useState(true)
+  const [loggedIn, setLoggedIn] = useState(false)
+
+  useEffect(() => {
+    fetch('/api/games').then(r => { if (r.ok) setLoggedIn(true) }).catch(() => {})
+  }, [])
 
   useEffect(() => {
     setLoading(true)
@@ -260,7 +265,11 @@ function ShameListView() {
         )}
 
         <div className="text-center pb-8">
-          <Link to="/" className="text-stone-500 hover:text-stone-400 text-sm underline">← Home</Link>
+          {loggedIn ? (
+            <Link to="/games" className="text-stone-500 hover:text-stone-400 text-sm underline">← Back to Games</Link>
+          ) : (
+            <a href="https://prohibitioner.com" className="text-stone-500 hover:text-stone-400 text-sm underline">← prohibitioner.com</a>
+          )}
         </div>
       </div>
     </div>
