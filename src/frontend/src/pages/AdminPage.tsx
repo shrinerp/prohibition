@@ -429,7 +429,8 @@ export default function AdminPage() {
         {/* ── Analytics tab ── */}
         {tab === 'analytics' && (
           <div className="space-y-4">
-            {/* Period selector */}
+            {/* Period selector + PostHog link */}
+            <div className="flex items-center justify-between">
             <div className="flex gap-2">
               {([1, 7, 30] as const).map(d => (
                 <button
@@ -444,6 +445,15 @@ export default function AdminPage() {
                   {d === 1 ? '24h' : `${d}d`}
                 </button>
               ))}
+            </div>
+            <a
+              href="https://us.posthog.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-stone-500 hover:text-amber-400 transition"
+            >
+              PostHog →
+            </a>
             </div>
 
             {analyticsLoading && (
