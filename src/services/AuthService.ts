@@ -13,7 +13,7 @@ export interface AuthResult {
 export class AuthService {
   constructor(private env: Env) {}
 
-  async register(email: string, password: string, dateOfBirth: string): Promise<AuthResult> {
+  async register(email: string, password: string, dateOfBirth: string, emailMarketing = false): Promise<AuthResult> {
     // Check existing user
     const existing = await this.env.PROHIBITIONDB.prepare(
       'SELECT id FROM users WHERE email = ?'
@@ -26,8 +26,8 @@ export class AuthService {
     const passwordHash = await bcrypt.hash(password, 10)
 
     const inserted = await this.env.PROHIBITIONDB.prepare(
-      'INSERT INTO users (email, password_hash, date_of_birth) VALUES (?, ?, ?) RETURNING id'
-    ).bind(email, passwordHash, dateOfBirth).first<{ id: number }>()
+      'INSERT INTO users (email, password_hash, date_of_birth, email_marketing) VALUES (?, ?, ?, ?) RETURNING id'
+    ).bind(email, passwordHash, dateOfBirth, emailMarketing ? 1 : 0).first<{ id: number }>()
 
     const userId = inserted?.id ?? 0
     const sessionToken = await this.createSession(userId)

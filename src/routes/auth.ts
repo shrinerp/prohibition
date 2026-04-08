@@ -7,9 +7,9 @@ import { AuthService } from '../services/AuthService'
 export const authRouter = new Hono<{ Bindings: Env }>()
 
 authRouter.post('/register', ageGateMiddleware, async (c) => {
-  const body = await c.req.json<{ email: string; password: string; date_of_birth: string }>()
+  const body = await c.req.json<{ email: string; password: string; date_of_birth: string; email_marketing?: boolean }>()
   const svc = new AuthService(c.env)
-  const result = await svc.register(body.email, body.password, body.date_of_birth)
+  const result = await svc.register(body.email, body.password, body.date_of_birth, body.email_marketing)
   if (!result.success) return c.json({ success: false, message: result.message }, 400)
   setCookie(c, 'session', result.sessionToken!, { httpOnly: true, path: '/', sameSite: 'Lax', secure: true, maxAge: 30 * 24 * 60 * 60 })
   return c.json({ success: true })

@@ -1,12 +1,14 @@
 import React, { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
+import { identify, capture } from '../analytics'
 
 export default function RegisterPage() {
   const nav = useNavigate()
-  const [email, setEmail]       = useState('')
-  const [password, setPassword] = useState('')
-  const [dob, setDob]           = useState('')
-  const [error, setError]       = useState('')
+  const [email, setEmail]                 = useState('')
+  const [password, setPassword]           = useState('')
+  const [dob, setDob]                     = useState('')
+  const [emailMarketing, setEmailMarketing] = useState(false)
+  const [error, setError]                 = useState('')
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -14,12 +16,15 @@ export default function RegisterPage() {
     const res = await fetch('/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, date_of_birth: dob })
+      body: JSON.stringify({ email, password, date_of_birth: dob, email_marketing: emailMarketing })
     })
     const data = await res.json()
     if (data.success) {
+      identify(email)
+      capture('register_completed')
       nav('/games')
     } else {
+      capture('register_failed', { reason: data.message })
       setError(data.message ?? 'Registration failed')
     }
   }
@@ -68,6 +73,18 @@ export default function RegisterPage() {
           required
           className="w-full px-4 py-2 bg-stone-700 rounded border border-stone-600 focus:outline-none focus:border-amber-400"
         />
+
+        <label className="flex items-start gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={emailMarketing}
+            onChange={e => setEmailMarketing(e.target.checked)}
+            className="mt-0.5 accent-amber-500 w-4 h-4 flex-shrink-0"
+          />
+          <span className="text-stone-400 text-xs leading-snug">
+            Send me occasional updates about new features, game invites, and Prohibition-era trivia. No spam — unsubscribe anytime.
+          </span>
+        </label>
 
         <button
           type="submit"
