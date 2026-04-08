@@ -33,6 +33,11 @@
     }
   },
 
+  // Cloudflare Zone ID for prohibitioner.com — used by the admin analytics endpoint
+  "vars": {
+    "CF_ZONE_ID": "PASTE_ZONE_ID_HERE"
+  },
+
   // Cron: clean up stale games daily at 03:00 UTC
   "triggers": {
     "crons": ["0 3 * * *"]
@@ -41,7 +46,7 @@
   "env": {
     "staging": {
       "name": "prohibition-staging",
-      "vars": { "ENVIRONMENT": "staging" },
+      "vars": { "ENVIRONMENT": "staging", "CF_ZONE_ID": "PASTE_ZONE_ID_HERE" },
       "send_email": [{ "name": "EMAIL" }],
       "d1_databases": [
         {

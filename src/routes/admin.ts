@@ -176,6 +176,21 @@ adminRouter.patch('/games/:id/players/:playerId', async (c) => {
   return c.json({ success: true })
 })
 
+// ── List all users ────────────────────────────────────────────────────────────
+adminRouter.get('/users', async (c) => {
+  const { results } = await c.env.PROHIBITIONDB.prepare(
+    `SELECT u.id, u.email, u.created_at,
+            COUNT(DISTINCT gp.game_id) AS games_count,
+            MAX(gp.last_seen_at)       AS last_seen_at
+     FROM users u
+     LEFT JOIN game_players gp ON gp.user_id = u.id AND gp.is_npc = 0
+     GROUP BY u.id
+     ORDER BY u.created_at DESC`
+  ).all<{ id: number; email: string; created_at: string; games_count: number; last_seen_at: number | null }>()
+
+  return c.json({ success: true, users: results })
+})
+
 // ── Test push notification (sends to the calling admin user) ──────────────────
 adminRouter.post('/test-push', async (c) => {
   const userId = c.get('userId')
@@ -199,4 +214,93 @@ adminRouter.post('/test-push', async (c) => {
   )
 
   return c.json({ success: true, message: `Sent to ${subs.length} subscription(s)`, subscriptionCount: subs.length, url: targetUrl })
+})
+
+// ── Cloudflare zone analytics ─────────────────────────────────────────────────
+adminRouter.get('/analytics', async (c) => {
+  const days = Math.min(30, Math.max(1, parseInt(c.req.query('days') ?? '7', 10)))
+  const end   = new Date()
+  const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000)
+
+  const useHourly  = days === 1
+  const groupField = useHourly ? 'httpRequests1hGroups' : 'httpRequests1dGroups'
+  const dimField   = useHourly ? 'datetime' : 'date'
+  const gteKey     = useHourly ? 'datetime_geq' : 'date_geq'
+  const lteKey     = useHourly ? 'datetime_leq' : 'date_leq'
+  const gteVal     = useHourly ? start.toISOString() : start.toISOString().slice(0, 10)
+  const lteVal     = useHourly ? end.toISOString()   : end.toISOString().slice(0, 10)
+
+  const query = `{
+    viewer {
+      zones(filter: { zoneTag: "${c.env.CF_ZONE_ID}" }) {
+        ${groupField}(
+          orderBy: [${dimField}_ASC]
+          limit: 31
+          filter: { ${gteKey}: "${gteVal}", ${lteKey}: "${lteVal}" }
+        ) {
+          dimensions { ${dimField} }
+          sum { requests bytes cachedRequests cachedBytes pageViews threats }
+          uniq { uniques }
+        }
+      }
+    }
+  }`
+
+  const resp = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${c.env.CF_API_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query }),
+  })
+
+  if (!resp.ok) return c.json({ success: false, message: `Cloudflare API error: ${resp.status}` }, 502)
+
+  const json = await resp.json<{
+    data?: { viewer: { zones: Array<Record<string, unknown[]>> } }
+    errors?: { message: string }[]
+  }>()
+
+  if (json.errors?.length) {
+    return c.json({ success: false, message: json.errors[0].message }, 502)
+  }
+
+  type CFRow = {
+    dimensions: Record<string, string>
+    sum: { requests: number; bytes: number; cachedRequests: number; cachedBytes: number; pageViews: number; threats: number }
+    uniq: { uniques: number }
+  }
+
+  const rows = (json.data?.viewer?.zones?.[0]?.[groupField] ?? []) as CFRow[]
+
+  const zero = { requests: 0, bytes: 0, cachedRequests: 0, cachedBytes: 0, pageViews: 0, threats: 0, uniques: 0 }
+  const totals = rows.reduce((acc, r) => ({
+    requests:       acc.requests       + r.sum.requests,
+    bytes:          acc.bytes          + r.sum.bytes,
+    cachedRequests: acc.cachedRequests + r.sum.cachedRequests,
+    cachedBytes:    acc.cachedBytes    + r.sum.cachedBytes,
+    pageViews:      acc.pageViews      + r.sum.pageViews,
+    threats:        acc.threats        + r.sum.threats,
+    uniques:        acc.uniques        + r.uniq.uniques,
+  }), zero)
+
+  const series = rows.map(r => ({ date: r.dimensions[dimField], ...r.sum, uniques: r.uniq.uniques }))
+
+  return c.json({ success: true, data: { totals, series, days } })
+})
+
+// ── Send email (Cloudflare Email Service PoC) ─────────────────────────────────
+adminRouter.post('/send-email', async (c) => {
+  const { to, subject, body } = await c.req.json<{ to: string; subject: string; body: string }>()
+  if (!to || !subject || !body) {
+    return c.json({ success: false, message: 'to, subject, and body are required' }, 400)
+  }
+
+  const result = await c.env.EMAIL.send({
+    to,
+    from: 'admin@prohibitioner.com',
+    subject,
+    html: `<p>${body.replace(/\n/g, '<br>')}</p>`,
+    text: body,
+  })
+
+  return c.json({ success: true, messageId: result.messageId })
 })

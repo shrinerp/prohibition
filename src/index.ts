@@ -13,6 +13,8 @@ export interface Env {
   VAPID_PUBLIC_KEY: string
   VAPID_PRIVATE_KEY: string
   VAPID_SUBJECT: string
+  CF_ZONE_ID: string
+  CF_API_TOKEN: string
   ASSETS: { fetch: (req: Request) => Promise<Response> }
   EMAIL: {
     send: (options: {
