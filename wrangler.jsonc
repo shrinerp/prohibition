@@ -13,6 +13,12 @@
     "not_found_handling": "single-page-application"
   },
 
+  "send_email": [
+    {
+      "name": "EMAIL"
+    }
+  ],
+
   "d1_databases": [
     {
       "binding": "PROHIBITIONDB",
@@ -30,5 +36,20 @@
   // Cron: clean up stale games daily at 03:00 UTC
   "triggers": {
     "crons": ["0 3 * * *"]
+  },
+
+  "env": {
+    "staging": {
+      "name": "prohibition-staging",
+      "vars": { "ENVIRONMENT": "staging" },
+      "send_email": [{ "name": "EMAIL" }],
+      "d1_databases": [
+        {
+          "binding": "PROHIBITIONDB",
+          "database_name": "prohibition-staging",
+          "database_id": "c8d40c25-2e24-4d9b-92f9-cc96f7db20c4"
+        }
+      ]
+    }
   }
 }
