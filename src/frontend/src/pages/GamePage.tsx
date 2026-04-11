@@ -814,6 +814,12 @@ export default function GamePage() {
     fetchAll()
   }
 
+  async function leaveGame() {
+    if (!confirm(game?.isHost ? 'You are the host. Leaving will cancel the game for everyone. Continue?' : 'Leave this lobby?')) return
+    await fetch(`/api/games/${gameId}/leave`, { method: 'DELETE' })
+    nav('/games')
+  }
+
   function rollToMove() {
     if (!player) return
     // If already rolled this turn, re-enter move mode preserving existing selections
@@ -1246,6 +1252,12 @@ export default function GamePage() {
                 {iAmReady ? 'Ready — waiting for host to start…' : 'Select a character to get ready'}
               </p>
             )}
+            <button
+              onClick={leaveGame}
+              className="w-full py-1.5 text-stone-600 hover:text-red-400 text-xs transition cursor-pointer"
+            >
+              {game.isHost ? 'Cancel Game' : 'Leave Lobby'}
+            </button>
           </div>
 
           {/* Column 2 — Character selection */}

@@ -136,6 +136,42 @@ gamesRouter.post('/:id/start', async (c) => {
   return c.json({ success: true })
 })
 
+// Leave a lobby before the game starts.
+// Host leaving cancels the game for everyone; non-host just removes themselves.
+gamesRouter.delete('/:id/leave', async (c) => {
+  const gameId = c.req.param('id')
+  const userId = c.get('userId')
+  const db = c.env.PROHIBITIONDB
+
+  const game = await db.prepare(
+    `SELECT status, host_user_id, player_count FROM games WHERE id = ?`
+  ).bind(gameId).first<{ status: string; host_user_id: number; player_count: number }>()
+
+  if (!game) return c.json({ success: false, message: 'Game not found' }, 404)
+  if (game.status !== 'lobby') return c.json({ success: false, message: 'Can only leave while in lobby' }, 400)
+
+  const membership = await db.prepare(
+    `SELECT id FROM game_players WHERE game_id = ? AND user_id = ?`
+  ).bind(gameId, userId).first<{ id: number }>()
+  if (!membership) return c.json({ success: false, message: 'Not in this game' }, 403)
+
+  if (game.host_user_id === userId) {
+    // Host leaves → cancel the game entirely
+    await db.batch([
+      db.prepare(`DELETE FROM game_players WHERE game_id = ?`).bind(gameId),
+      db.prepare(`DELETE FROM games WHERE id = ?`).bind(gameId),
+    ])
+  } else {
+    // Non-host leaves → remove them and decrement count
+    await db.batch([
+      db.prepare(`DELETE FROM game_players WHERE game_id = ? AND user_id = ?`).bind(gameId, userId),
+      db.prepare(`UPDATE games SET player_count = player_count - 1 WHERE id = ?`).bind(gameId),
+    ])
+  }
+
+  return c.json({ success: true })
+})
+
 gamesRouter.post('/:id/tutorial-done', async (c) => {
   const gameId = c.req.param('id')
   const userId = c.get('userId')
