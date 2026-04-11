@@ -1089,8 +1089,8 @@ export default function GamePage() {
         {/* Two-column grid — stacks on mobile */}
         <div className="max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
 
-          {/* Column 1 — Game setup */}
-          <div className="space-y-3">
+          {/* Column 1 — Game setup (visually second) */}
+          <div className="space-y-3 md:order-2">
 
             {/* Game identity card: invite code + game name + email invite */}
             <div className="bg-stone-900 border border-stone-700 rounded-xl overflow-hidden">
@@ -1278,8 +1278,8 @@ export default function GamePage() {
             </button>
           </div>
 
-          {/* Column 2 — Character selection */}
-          <div className="space-y-3">
+          {/* Column 2 — Character selection (visually first) */}
+          <div className="space-y-3 md:order-1">
 
             {/* Character carousel */}
             <CharacterCarousel
