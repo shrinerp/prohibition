@@ -1281,6 +1281,14 @@ export default function GamePage() {
           {/* Column 2 — Character selection */}
           <div className="space-y-3">
 
+            {/* Character carousel */}
+            <CharacterCarousel
+              characters={CHARACTERS}
+              myClass={myClass}
+              takenClasses={takenClasses}
+              onSelect={selectCharacter}
+            />
+
             {/* Why character choice matters */}
             <div className="bg-stone-900 border border-stone-700 rounded-xl overflow-hidden">
               <div className="px-4 py-3 border-b border-stone-800">
@@ -1299,14 +1307,6 @@ export default function GamePage() {
                 <p className="text-stone-600 text-xs italic">Hint: your starting city's primary alcohol affects how well each build performs.</p>
               </div>
             </div>
-
-            {/* Character carousel */}
-            <CharacterCarousel
-              characters={CHARACTERS}
-              myClass={myClass}
-              takenClasses={takenClasses}
-              onSelect={selectCharacter}
-            />
           </div>
 
         </div>
