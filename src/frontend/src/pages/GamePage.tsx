@@ -385,8 +385,13 @@ export default function GamePage() {
         fetch(`/api/games/${gameId}/map`),
         fetch(`/api/games/${gameId}/market`)
       ])
-      if (stateRes.status === 401 || stateRes.status === 403) {
+      if (stateRes.status === 401) {
         nav(`/login?redirect=/games/${gameId}`)
+        return
+      }
+      if (stateRes.status === 403) {
+        // No longer in this game (e.g. booted) — go back to lobby list
+        nav('/games')
         return
       }
 
