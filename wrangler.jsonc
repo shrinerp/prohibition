@@ -35,9 +35,9 @@
 
   // Cloudflare Zone ID for prohibitioner.com — used by the admin analytics endpoint
   "vars": {
-    "CF_ZONE_ID": "PASTE_ZONE_ID_HERE"
+    "CF_ZONE_ID": "efac498f47da579bfada3b3c5ef65866"
   },
-
+  
   // Cron: clean up stale games daily at 03:00 UTC
   "triggers": {
     "crons": ["0 3 * * *"]

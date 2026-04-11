@@ -62,17 +62,47 @@ gamesRouter.get('/', async (c) => {
 
 gamesRouter.post('/', async (c) => {
   const svc = new GameService(c.env)
-  const body = await c.req.json().catch(() => ({})) as { totalSeasons?: number }
+  const body = await c.req.json().catch(() => ({})) as { totalSeasons?: number; isPublic?: boolean }
   const totalSeasons = [13, 26, 39, 52].includes(body.totalSeasons ?? 0) ? body.totalSeasons! : 52
-  const result = await svc.createGame(c.get('userId'), totalSeasons)
+  const isPublic = body.isPublic === true
+  const result = await svc.createGame(c.get('userId'), totalSeasons, isPublic)
   if (!result.success) return c.json({ success: false, message: result.message }, 400)
   return c.json({ success: true, gameId: result.gameId, inviteCode: result.inviteCode })
 })
 
+// List open public lobbies anyone can join
+gamesRouter.get('/public', async (c) => {
+  const userId = c.get('userId')
+  const { results } = await c.env.PROHIBITIONDB.prepare(
+    `SELECT g.id, g.game_name, g.total_seasons, g.player_count, g.max_players, g.created_at,
+            COALESCE(gp.display_name, u.email) AS host_name
+     FROM games g
+     JOIN game_players gp ON gp.game_id = g.id AND gp.user_id = g.host_user_id
+     LEFT JOIN users u ON u.id = g.host_user_id
+     WHERE g.is_public = 1 AND g.status = 'lobby'
+       AND g.id NOT IN (SELECT game_id FROM game_players WHERE user_id = ?)
+     ORDER BY g.created_at DESC
+     LIMIT 20`
+  ).bind(userId).all<{
+    id: string; game_name: string | null; total_seasons: number
+    player_count: number; max_players: number; created_at: string; host_name: string
+  }>()
+  return c.json({ success: true, games: results })
+})
+
 gamesRouter.post('/join', async (c) => {
-  const { inviteCode } = await c.req.json<{ inviteCode: string }>()
+  const body = await c.req.json<{ inviteCode?: string; gameId?: string }>()
   const svc = new GameService(c.env)
-  const result = await svc.joinGame(inviteCode, c.get('userId'))
+  const userId = c.get('userId')
+
+  // Join by gameId (public lobby) or invite code (private)
+  if (body.gameId) {
+    const result = await svc.joinPublicGame(body.gameId, userId)
+    if (!result.success) return c.json({ success: false, message: result.message }, 400)
+    return c.json({ success: true, gameId: result.gameId })
+  }
+
+  const result = await svc.joinGame(body.inviteCode ?? '', userId)
   if (!result.success) return c.json({ success: false, message: result.message }, 400)
   return c.json({ success: true, gameId: result.gameId })
 })
@@ -227,6 +257,25 @@ gamesRouter.patch('/:id/max-players', async (c) => {
   return c.json({ success: true })
 })
 
+gamesRouter.patch('/:id/visibility', async (c) => {
+  const gameId = c.req.param('id')
+  const userId = c.get('userId')
+  const { isPublic } = await c.req.json<{ isPublic: boolean }>()
+
+  const game = await c.env.PROHIBITIONDB.prepare(
+    `SELECT status, host_user_id FROM games WHERE id = ?`
+  ).bind(gameId).first<{ status: string; host_user_id: number }>()
+  if (!game) return c.json({ success: false, message: 'Game not found' }, 404)
+  if (game.status !== 'lobby') return c.json({ success: false, message: 'Game already started' }, 400)
+  if (game.host_user_id !== userId) return c.json({ success: false, message: 'Only the host can change this' }, 403)
+
+  await c.env.PROHIBITIONDB.prepare(
+    `UPDATE games SET is_public = ? WHERE id = ?`
+  ).bind(isPublic ? 1 : 0, gameId).run()
+
+  return c.json({ success: true })
+})
+
 // Send email invite — host only, lobby only
 gamesRouter.post('/:id/invite', async (c) => {
   const gameId = c.req.param('id')
@@ -324,7 +373,7 @@ gamesRouter.post('/:id/turn', async (c) => {
   // Verify it's this player's turn
   const playerRow = await c.env.PROHIBITIONDB.prepare(
     `SELECT gp.id, gp.turn_order, gp.current_city_id, gp.character_class,
-            gp.heat, gp.pending_police_encounter, gp.cash,
+            gp.heat, gp.pending_police_encounter, gp.cash, gp.turn_started_at,
             gp.stuck_until_season, COALESCE(gp.display_name, u.email) AS display_name,
             g.current_player_index, g.current_season, g.total_seasons, g.status, g.player_count, g.max_players
      FROM game_players gp
@@ -333,7 +382,7 @@ gamesRouter.post('/:id/turn', async (c) => {
      WHERE gp.game_id = ? AND gp.user_id = ?`
   ).bind(gameId, userId).first<{
     id: number; turn_order: number; current_city_id: number | null
-    character_class: string; heat: number; cash: number
+    character_class: string; heat: number; cash: number; turn_started_at: string | null
     pending_police_encounter: string | null
     stuck_until_season: number | null; display_name: string | null
     current_player_index: number; current_season: number; total_seasons: number; status: string; player_count: number; max_players: number
@@ -345,11 +394,14 @@ gamesRouter.post('/:id/turn', async (c) => {
     return c.json({ success: false, message: 'Not your turn' }, 400)
   }
 
-  // Record turn
+  // Record turn (with duration tracking)
+  const durationSeconds = playerRow.turn_started_at
+    ? Math.max(1, Math.round((Date.now() - new Date(playerRow.turn_started_at + 'Z').getTime()) / 1000))
+    : null
   await c.env.PROHIBITIONDB.prepare(
-    `INSERT INTO turns (game_id, player_id, season, actions)
-     VALUES (?, ?, ?, ?)`
-  ).bind(gameId, playerRow.id, playerRow.current_season, JSON.stringify(actions)).run()
+    `INSERT INTO turns (game_id, player_id, season, actions, duration_seconds)
+     VALUES (?, ?, ?, ?, ?)`
+  ).bind(gameId, playerRow.id, playerRow.current_season, JSON.stringify(actions), durationSeconds).run()
 
   // Pre-fetch vehicles and all game players in parallel — avoids N+1 queries in the action loop
   const [{ results: playerVehicles }, { results: allPlayersList }] = await Promise.all([
@@ -375,6 +427,22 @@ gamesRouter.post('/:id/turn', async (c) => {
   let policeEncounterResult: { vehicleId?: number; bribeCost: number; populationTier: string; heat: number } | null = null
   const celebrations: Array<{ type: string; cityId?: number; newTier?: number; vehicleId?: string; vehicleDbId?: number; vehicleType?: string; missionCardId?: number; reward?: number; repairCost?: number; units?: number; alcoholType?: string }> = []
   const boughtThisTurn = new Map<number, number>()
+
+  // ── Ledger helpers ─────────────────────────────────────────────────────────
+  type LedgerEntry = { type: string; amount: number; description: string; cityId: number | null; pid: number }
+  const pendingLedger: LedgerEntry[] = []
+  const addLedger = (type: string, amount: number, description: string, cityId: number | null = null, pid = playerRow.id) => {
+    if (amount !== 0) pendingLedger.push({ type, amount, description, cityId, pid })
+  }
+  const flushLedger = async () => {
+    if (pendingLedger.length === 0) return
+    await c.env.PROHIBITIONDB.batch(
+      pendingLedger.splice(0).map(e => c.env.PROHIBITIONDB.prepare(
+        `INSERT INTO ledger_entries (game_id, player_id, season, type, amount, description, city_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).bind(gameId, e.pid, playerRow.current_season, e.type, e.amount, e.description, e.cityId))
+    )
+  }
 
   for (const action of actions as Action[]) {
 
@@ -417,6 +485,7 @@ gamesRouter.post('/:id/turn', async (c) => {
           await c.env.PROHIBITIONDB.prepare(
             `UPDATE game_players SET cash = cash - ? WHERE id = ?`
           ).bind(sr.cashSeized, playerRow.id).run()
+          addLedger('police_cash', -sr.cashSeized, 'Police seized cash', playerRow.current_city_id)
         }
         const newHeat = Math.max(0, Math.min(100, freshHeat + sr.heatDelta))
         const remaining2 = queue.length > 0 ? JSON.stringify(queue) : null
@@ -433,6 +502,7 @@ gamesRouter.post('/:id/turn', async (c) => {
             `UPDATE game_players SET cash = cash - ?, pending_police_encounter = ? WHERE id = ?`
           ).bind(br.cashPaid, remaining2, playerRow.id).run()
           playerRow.pending_police_encounter = remaining2
+          addLedger('police_bribe', -br.cashPaid, 'Paid police bribe', playerRow.current_city_id)
         }
 
       } else if (choice === 'run') {
@@ -590,6 +660,10 @@ gamesRouter.post('/:id/turn', async (c) => {
                   `UPDATE game_players SET cash = cash + ? WHERE id = ?`
                 ).bind(trapActualPaid, trapRow.setter_player_id),
               ])
+              if (trapActualPaid > 0) {
+                addLedger('trap_penalty', -trapActualPaid, `Trap by ${setterName.replace(/@.*$/, '')}`, newCityId)
+                addLedger('toll_received', trapActualPaid, `Trap payout from ${(playerRow.display_name ?? 'player').replace(/@.*$/, '')}`, newCityId, trapRow.setter_player_id)
+              }
             } else if (trapRow.consequence_type === 'alcohol_loss') {
               let remaining = Math.max(1, params.amount ?? 5)
               const vehiclesHere = playerVehicles.filter(v => v.city_id === newCityId)
@@ -681,6 +755,8 @@ gamesRouter.post('/:id/turn', async (c) => {
               c.env.PROHIBITIONDB.prepare(`INSERT INTO game_messages (game_id, player_id, message, is_system) VALUES (?, ?, ?, 1)`)
                 .bind(gameId, playerRow.id, `💰 ${victimName} paid ${ownerRow.owner_name} a $${actualToll} courtesy toll for passing through ${tollCityName}.`),
             ])
+            addLedger('toll_paid', -actualToll, `Toll in ${tollCityName}`, newCityId)
+            addLedger('toll_received', actualToll, `Toll received from ${victimName}`, newCityId, ownerRow.id)
             } // end else (not allied)
           }
         }
@@ -729,6 +805,7 @@ gamesRouter.post('/:id/turn', async (c) => {
                ON CONFLICT(vehicle_id, alcohol_type) DO UPDATE SET quantity = quantity + excluded.quantity`
             ).bind(action.vehicleId, action.alcoholType, toBuy)
           ])
+          addLedger('buy', -cost, `Bought ${toBuy}×${action.alcoholType}`, vCityId)
         }
       }
     }
@@ -907,6 +984,7 @@ gamesRouter.post('/:id/turn', async (c) => {
               ).bind(gameId, sellCityId, action.alcoholType),
               c.env.PROHIBITIONDB.prepare(`UPDATE game_players SET cash = cash + ?, total_cash_earned = total_cash_earned + ? WHERE id = ?`).bind(revenue, revenue, playerRow.id)
             ])
+            addLedger('sell', revenue, `Sold ${toSell}×${action.alcoholType}`, sellCityId)
             await updateCumulativeProgress(c.env.PROHIBITIONDB, playerRow.id, {
               type: 'sold_units', quantity: toSell, alcoholType: action.alcoholType, revenue
             })
@@ -948,6 +1026,7 @@ gamesRouter.post('/:id/turn', async (c) => {
           ).bind(toSell, action.vehicleId, action.alcoholType),
           c.env.PROHIBITIONDB.prepare(`UPDATE game_players SET cash = cash + ?, total_cash_earned = total_cash_earned + ? WHERE id = ?`).bind(revenue, revenue, playerRow.id)
         ])
+        addLedger('sell', revenue, `Sold ${toSell}×${action.alcoholType}`, vCityId)
         await updateCumulativeProgress(c.env.PROHIBITIONDB, playerRow.id, {
           type: 'sold_units', quantity: toSell, alcoholType: action.alcoholType, revenue
         })
@@ -978,6 +1057,7 @@ gamesRouter.post('/:id/turn', async (c) => {
                 c.env.PROHIBITIONDB.prepare(`UPDATE game_players SET cash = cash - ? WHERE id = ?`).bind(cost, playerRow.id),
                 c.env.PROHIBITIONDB.prepare(`UPDATE game_cities SET bribe_player_id = ?, bribe_expires_season = ? WHERE id = ?`).bind(playerRow.id, expiresAt, bribeCityId)
               ])
+              addLedger('bribe', -cost, 'Bribed city official', bribeCityId)
               await updateCumulativeProgress(c.env.PROHIBITIONDB, playerRow.id, { type: 'official_bribed' })
             }
           }
@@ -1028,6 +1108,7 @@ gamesRouter.post('/:id/turn', async (c) => {
              SELECT ?, ?, 1, COALESCE((SELECT MAX(still_number) FROM distilleries WHERE player_id = ?), 0) + 1, 0
              WHERE NOT EXISTS (SELECT 1 FROM distilleries WHERE player_id = ? AND city_id = ?)`
           ).bind(playerRow.id, claimCityId, playerRow.id, playerRow.id, claimCityId).run()
+          addLedger('claim_city', -cost, isNeutral ? 'Claimed city' : 'Took over city', claimCityId)
           celebrations.push({ type: 'claim_city', cityId: claimCityId })
         }
       }
@@ -1054,6 +1135,7 @@ gamesRouter.post('/:id/turn', async (c) => {
             c.env.PROHIBITIONDB.prepare(`UPDATE game_players SET cash = cash - ? WHERE id = ?`).bind(cost, playerRow.id),
             c.env.PROHIBITIONDB.prepare(`UPDATE distilleries SET tier = tier + 1 WHERE id = ?`).bind(distRow.id)
           ])
+          addLedger('upgrade_still', -cost, `Upgraded still → Tier ${distRow.tier + 1}`, upgradeCityId)
           celebrations.push({ type: 'upgrade_still', cityId: upgradeCityId, newTier: distRow.tier + 1 })
         }
       }
@@ -1089,6 +1171,7 @@ gamesRouter.post('/:id/turn', async (c) => {
           ).bind(playerRow.id).all<{ id: number; vehicle_type: string; city_id: number; heat: number; stationary_since: number }>()
           playerVehicles.length = 0
           playerVehicles.push(...freshVehicles)
+          addLedger('buy_vehicle', -price, `Bought ${vehicleType.replace(/_/g, ' ')}`)
           celebrations.push({ type: 'upgrade_vehicle', vehicleId: vehicleType })
         }
       }
@@ -1136,12 +1219,15 @@ gamesRouter.post('/:id/turn', async (c) => {
       c.env.PROHIBITIONDB, gameId, playerRow.id, playerRow.current_season, snapshot
     )
     for (const cardId of missionResult.completedCardIds) {
-      celebrations.push({ type: 'mission_complete', missionCardId: cardId, reward: getMissionCard(cardId)?.reward ?? 0 })
+      const card = getMissionCard(cardId)
+      if (card?.reward) addLedger('mission', card.reward, card.title)
+      celebrations.push({ type: 'mission_complete', missionCardId: cardId, reward: card?.reward ?? 0 })
     }
   }
 
   // If a police encounter was triggered this turn, hold the turn until the player resolves it
   if (policeEncounterResult) {
+    await flushLedger()
     return c.json({ success: true, policeEncounter: policeEncounterResult } as object)
   }
 
@@ -1150,6 +1236,7 @@ gamesRouter.post('/:id/turn', async (c) => {
   const TERMINAL_ACTIONS = new Set(['move', 'stay', 'skip', 'police_resolve'])
   const hasTerminal = (actions as Action[]).some(a => TERMINAL_ACTIONS.has(a.type))
   if (!hasTerminal) {
+    await flushLedger()
     return c.json({ success: true, celebrations: celebrations.length > 0 ? celebrations : undefined })
   }
 
@@ -1178,6 +1265,7 @@ gamesRouter.post('/:id/turn', async (c) => {
 
   // Execute NPC AI turns — each NPC sells stock, upgrades or expands per archetype
   const npcTurnInserts: ReturnType<typeof c.env.PROHIBITIONDB.prepare>[] = []
+  const ranNpcPositions = new Set<number>()
   for (let i = 0; i < totalPlayers; i++) {
     const next = playerByOrder.get(nextIndex)
     if (!next || !next.is_npc) break
@@ -1185,6 +1273,7 @@ gamesRouter.post('/:id/turn', async (c) => {
     npcTurnInserts.push(c.env.PROHIBITIONDB.prepare(
       `INSERT INTO turns (game_id, player_id, season, actions, skipped) VALUES (?, ?, ?, ?, 0)`
     ).bind(gameId, next.id, nextSeason, JSON.stringify([{ type: 'npc_turn' }])))
+    ranNpcPositions.add(nextIndex)
     nextIndex  = (nextIndex + 1) % totalPlayers
     nextSeason += nextIndex === 0 ? 1 : 0
   }
@@ -1202,14 +1291,20 @@ gamesRouter.post('/:id/turn', async (c) => {
     ).bind(gameId, next.id, nextSeason, JSON.stringify([{ type: 'jail_skip' }])))
     nextIndex  = (nextIndex + 1) % totalPlayers
     nextSeason += nextIndex === 0 ? 1 : 0
-    // After advancing past a jailed player, also skip any NPCs that follow
+    // After advancing past a jailed player, also run any NPCs that follow and haven't run yet
     for (let j = 0; j < totalPlayers; j++) {
       const afterJail = playerByOrder.get(nextIndex)
       if (!afterJail || !afterJail.is_npc) break
+      if (ranNpcPositions.has(nextIndex)) {
+        // This NPC already ran this round — advance index but don't bump the season again
+        nextIndex = (nextIndex + 1) % totalPlayers
+        continue
+      }
       await runNpcTurn(c.env.PROHIBITIONDB, gameId, afterJail.id, nextSeason)
       jailSkipInserts.push(c.env.PROHIBITIONDB.prepare(
         `INSERT INTO turns (game_id, player_id, season, actions, skipped) VALUES (?, ?, ?, ?, 0)`
       ).bind(gameId, afterJail.id, nextSeason, JSON.stringify([{ type: 'npc_turn' }])))
+      ranNpcPositions.add(nextIndex)
       nextIndex  = (nextIndex + 1) % totalPlayers
       nextSeason += nextIndex === 0 ? 1 : 0
     }
@@ -1284,10 +1379,27 @@ gamesRouter.post('/:id/turn', async (c) => {
     ).bind(gameId).all<{ id: number; population_tier: string }>()
     const JAZZ_INCOME: Record<string, number> = { large: 50, major: 100 }
     const jazzMap = new Map<number, number>()
-    for (const r of jazzRows) jazzMap.set(r.id, (jazzMap.get(r.id) ?? 0) + (JAZZ_INCOME[r.population_tier] ?? 0))
-    await Promise.all([...jazzMap.entries()].map(([pid, income]) =>
-      c.env.PROHIBITIONDB.prepare(`UPDATE game_players SET cash = cash + ? WHERE id = ?`).bind(income, pid).run()
-    ))
+    const jazzCityCount = new Map<number, { large: number; major: number }>()
+    for (const r of jazzRows) {
+      jazzMap.set(r.id, (jazzMap.get(r.id) ?? 0) + (JAZZ_INCOME[r.population_tier] ?? 0))
+      const counts = jazzCityCount.get(r.id) ?? { large: 0, major: 0 }
+      if (r.population_tier === 'large') counts.large++
+      else if (r.population_tier === 'major') counts.major++
+      jazzCityCount.set(r.id, counts)
+    }
+    await Promise.all([...jazzMap.entries()].map(async ([pid, income]) => {
+      await c.env.PROHIBITIONDB.prepare(`UPDATE game_players SET cash = cash + ? WHERE id = ?`).bind(income, pid).run()
+      const counts = jazzCityCount.get(pid) ?? { large: 0, major: 0 }
+      const parts = [counts.large > 0 ? `${counts.large} large` : '', counts.major > 0 ? `${counts.major} major` : ''].filter(Boolean).join(', ')
+      const desc = `Jazz Singer income (${parts})`
+      await c.env.PROHIBITIONDB.prepare(
+        `INSERT INTO ledger_entries (game_id, player_id, season, type, amount, description, city_id) VALUES (?, ?, ?, 'jazz_income', ?, ?, NULL)`
+      ).bind(gameId, pid, playerRow.current_season, income, desc).run()
+      // Notify the jazz singer player
+      await c.env.PROHIBITIONDB.prepare(
+        `INSERT INTO game_messages (game_id, player_id, message, is_system) VALUES (?, ?, ?, 1)`
+      ).bind(gameId, pid, `🎵 Jazz Singer passive income: +$${income.toLocaleString()} (${parts})`).run()
+    }))
   }
 
   // End game after the final season
@@ -1296,6 +1408,7 @@ gamesRouter.post('/:id/turn', async (c) => {
       `UPDATE games SET status = 'ended', current_player_index = ?, current_season = ? WHERE id = ?`
     ).bind(nextIndex, nextSeason, gameId).run()
     await recordLeaderboardEntries(c.env.PROHIBITIONDB, gameId, playerRow.total_seasons, playerRow.current_season).catch(() => {})
+    await flushLedger()
     return c.json({ success: true, gameEnded: true, celebrations: celebrations.length > 0 ? celebrations : undefined })
   }
 
@@ -1351,6 +1464,7 @@ gamesRouter.post('/:id/turn', async (c) => {
   await c.env.PROHIBITIONDB.batch([
     c.env.PROHIBITIONDB.prepare(`UPDATE games SET current_player_index = ?, current_season = ? WHERE id = ?`).bind(nextIndex, nextSeason, gameId),
     c.env.PROHIBITIONDB.prepare(`UPDATE game_players SET sell_used = 0, max_out_used = 0 WHERE id = ?`).bind(playerRow.id),
+    c.env.PROHIBITIONDB.prepare(`UPDATE game_players SET turn_started_at = datetime('now') WHERE game_id = ? AND turn_order = ? AND is_npc = 0`).bind(gameId, nextIndex),
   ])
 
   // Notify the next player by email if they don't have the game open
@@ -1402,6 +1516,7 @@ gamesRouter.post('/:id/turn', async (c) => {
     )
   }
 
+  await flushLedger()
   return c.json({ success: true, celebrations: celebrations.length > 0 ? celebrations : undefined })
 })
 
@@ -1425,12 +1540,12 @@ gamesRouter.get('/:id/state', async (c) => {
   const userId = c.get('userId')
 
   const game = await c.env.PROHIBITIONDB.prepare(
-    `SELECT id, status, current_season, total_seasons, current_player_index, turn_deadline, player_count, max_players, invite_code, host_user_id, game_name
+    `SELECT id, status, current_season, total_seasons, current_player_index, turn_deadline, player_count, max_players, invite_code, host_user_id, game_name, is_public
      FROM games WHERE id = ?`
   ).bind(gameId).first<{
     id: string; status: string; current_season: number; total_seasons: number
     current_player_index: number; turn_deadline: string | null; player_count: number; max_players: number
-    invite_code: string; host_user_id: number; game_name: string | null
+    invite_code: string; host_user_id: number; game_name: string | null; is_public: number
   }>()
   if (!game) return c.json({ success: false, message: 'Game not found' }, 404)
 
@@ -1452,12 +1567,13 @@ gamesRouter.get('/:id/state', async (c) => {
 
   const { results: players } = await c.env.PROHIBITIONDB.prepare(
     `SELECT gp.id, gp.turn_order, gp.character_class, gp.is_npc, gp.current_city_id, gp.cash,
-            gp.display_name, u.email
+            gp.display_name, gp.turn_started_at, u.email
      FROM game_players gp LEFT JOIN users u ON gp.user_id = u.id
      WHERE gp.game_id = ? ORDER BY gp.turn_order`
   ).bind(gameId).all<{
     id: number; turn_order: number; character_class: string; is_npc: number;
-    current_city_id: number | null; cash: number; display_name: string | null; email: string | null
+    current_city_id: number | null; cash: number; display_name: string | null
+    turn_started_at: string | null; email: string | null
   }>()
 
   const { results: vehicleRows } = await c.env.PROHIBITIONDB.prepare(
@@ -1474,12 +1590,12 @@ gamesRouter.get('/:id/state', async (c) => {
   }
 
   const { results: distilleries } = await c.env.PROHIBITIONDB.prepare(
-    `SELECT d.id, d.city_id, d.tier, cp.primary_alcohol, cp.name AS city_name
+    `SELECT d.id, d.city_id, d.tier, cp.primary_alcohol, cp.name AS city_name, cp.is_coastal
      FROM distilleries d
      JOIN game_cities gc ON d.city_id = gc.id
      JOIN city_pool cp ON gc.city_pool_id = cp.id
      WHERE d.player_id = ?`
-  ).bind(player.id).all<{ id: number; city_id: number; tier: number; primary_alcohol: string; city_name: string }>()
+  ).bind(player.id).all<{ id: number; city_id: number; tier: number; primary_alcohol: string; city_name: string; is_coastal: number }>()
   const distilleryCityIds = distilleries.map(d => d.city_id)
 
   // Bribe status for current city
@@ -1567,6 +1683,7 @@ gamesRouter.get('/:id/state', async (c) => {
         gameName:             game.game_name ?? null,
         isHost:               game.host_user_id === userId,
         maxPlayers:           game.max_players,
+        isPublic:             game.is_public === 1,
       },
       player: {
         id:               player.id,
@@ -1613,6 +1730,7 @@ gamesRouter.get('/:id/state', async (c) => {
           tier:          d.tier,
           primaryAlcohol: d.primary_alcohol,
           cityName:      d.city_name,
+          isCoastal:     d.is_coastal === 1,
         })),
         missions:         missionRows.map(m => ({
           id:             m.id,
@@ -1628,6 +1746,7 @@ gamesRouter.get('/:id/state', async (c) => {
         characterClass: p.character_class,
         isNpc:         p.is_npc === 1,
         currentCityId: p.current_city_id,
+        turnStartedAt: p.turn_started_at ?? null,
         name:          p.display_name ?? (p.is_npc ? `NPC ${p.turn_order + 1}` : (p.email?.split('@')[0] ?? 'Player'))
       })),
       vehiclePrices: VEHICLE_PRICES,
@@ -1641,6 +1760,62 @@ gamesRouter.get('/:id/state', async (c) => {
       }))
     }
   })
+})
+
+gamesRouter.get('/:id/timing', async (c) => {
+  const gameId = c.req.param('id')
+  const { results } = await c.env.PROHIBITIONDB.prepare(
+    `SELECT t.player_id, gp.display_name, u.email,
+            CAST(ROUND(AVG(t.duration_seconds)) AS INTEGER) AS avg_seconds,
+            MAX(t.duration_seconds) AS max_seconds,
+            SUM(t.duration_seconds) AS total_seconds,
+            COUNT(*) AS turn_count
+     FROM turns t
+     JOIN game_players gp ON gp.id = t.player_id
+     LEFT JOIN users u ON gp.user_id = u.id
+     WHERE t.game_id = ? AND t.duration_seconds IS NOT NULL AND gp.is_npc = 0
+     GROUP BY t.player_id
+     ORDER BY avg_seconds DESC`
+  ).bind(gameId).all<{
+    player_id: number; display_name: string | null; email: string | null
+    avg_seconds: number; max_seconds: number; total_seconds: number; turn_count: number
+  }>()
+
+  return c.json({
+    success: true,
+    players: results.map(r => ({
+      playerId:     r.player_id,
+      name:         r.display_name ?? r.email?.split('@')[0] ?? 'Player',
+      avgSeconds:   r.avg_seconds,
+      maxSeconds:   r.max_seconds,
+      totalSeconds: r.total_seconds,
+      turnCount:    r.turn_count,
+    }))
+  })
+})
+
+gamesRouter.get('/:id/ledger', async (c) => {
+  const gameId = c.req.param('id')
+  const userId = c.get('userId')
+  const playerRow = await c.env.PROHIBITIONDB.prepare(
+    `SELECT gp.id FROM game_players gp WHERE gp.game_id = ? AND gp.user_id = ?`
+  ).bind(gameId, userId).first<{ id: number }>()
+  if (!playerRow) return c.json({ success: false, message: 'Not in game' }, 403)
+
+  const { results } = await c.env.PROHIBITIONDB.prepare(
+    `SELECT le.id, le.season, le.type, le.amount, le.description,
+            cp.name AS city_name
+     FROM ledger_entries le
+     LEFT JOIN game_cities gc ON le.city_id = gc.id
+     LEFT JOIN city_pool cp ON gc.city_pool_id = cp.id
+     WHERE le.game_id = ? AND le.player_id = ?
+     ORDER BY le.id DESC
+     LIMIT 300`
+  ).bind(gameId, playerRow.id).all<{
+    id: number; season: number; type: string; amount: number; description: string; city_name: string | null
+  }>()
+
+  return c.json({ success: true, entries: results })
 })
 
 gamesRouter.get('/:id/recap', async (c) => {
@@ -2334,6 +2509,9 @@ gamesRouter.post('/:id/vehicle-repair', async (c) => {
       c.env.PROHIBITIONDB.prepare(`INSERT INTO game_messages (game_id, player_id, message) VALUES (?, ?, ?)`)
         .bind(gameId, playerRow.id,
           `🔧 Repaired the ${vehicle.vehicle_type.replace(/_/g, ' ')} for $${repairCost.toLocaleString()}.`),
+      c.env.PROHIBITIONDB.prepare(
+        `INSERT INTO ledger_entries (game_id, player_id, season, type, amount, description, city_id) VALUES (?, ?, ?, 'vehicle_repair', ?, ?, ?)`
+      ).bind(gameId, playerRow.id, playerRow.current_season, -repairCost, `Repaired ${vehicle.vehicle_type.replace(/_/g, ' ')}`, vehicle.city_id),
     ])
     return c.json({ success: true, choice: 'repair', repairCost })
   } else {
@@ -2461,7 +2639,10 @@ gamesRouter.post('/:id/sell-distillery-stock', async (c) => {
       `INSERT INTO game_messages (game_id, player_id, message) VALUES (?, ?, ?)`
     ).bind(gameId, playerRow.id,
       `💰 ${playerRow.display_name ?? 'You'} sold everything for $${totalRevenue.toLocaleString()}.`
-    )
+    ),
+    c.env.PROHIBITIONDB.prepare(
+      `INSERT INTO ledger_entries (game_id, player_id, season, type, amount, description, city_id) VALUES (?, ?, ?, 'sell_all', ?, 'Sold all stock', NULL)`
+    ).bind(gameId, playerRow.id, playerRow.current_season, totalRevenue),
   )
 
   batchOps.push(
@@ -2641,6 +2822,9 @@ gamesRouter.post('/:id/sell-vehicle', async (c) => {
     c.env.PROHIBITIONDB.prepare(`DELETE FROM vehicle_inventory WHERE vehicle_id = ?`).bind(vehicleId),
     // Remove vehicle
     c.env.PROHIBITIONDB.prepare(`DELETE FROM vehicles WHERE id = ? AND player_id = ?`).bind(vehicleId, playerRow.id),
+    c.env.PROHIBITIONDB.prepare(
+      `INSERT INTO ledger_entries (game_id, player_id, season, type, amount, description, city_id) VALUES (?, ?, ?, 'sell_vehicle', ?, ?, NULL)`
+    ).bind(gameId, playerRow.id, playerRow.current_season, saleValue, `Sold vehicle (50% of $${vehicle.purchase_price.toLocaleString()})`),
   ])
 
   return c.json({ success: true, saleValue })

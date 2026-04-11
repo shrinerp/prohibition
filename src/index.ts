@@ -99,6 +99,68 @@ app.route('/api/games', gamesRouter)
 app.route('/api/admin', adminRouter)
 app.route('/api/push', pushRouter)
 
+// ── Results page — inject OG/Twitter meta tags for social previews ────────────
+// Must be registered before the catch-all so Hono matches it first.
+// Social crawlers (Slack, Facebook, X, Instagram) don't execute JS, so tags
+// must be server-side injected into the HTML shell.
+function escHtml(s: string) {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+app.get('/results/:gameId', async (c) => {
+  const gameId = c.req.param('gameId')
+
+  const { results } = await c.env.PROHIBITIONDB.prepare(
+    `SELECT le.player_name, le.rank, le.net_worth, le.total_seasons, g.game_name
+     FROM leaderboard_entries le
+     JOIN games g ON le.game_id = g.id
+     WHERE le.game_id = ?
+     ORDER BY le.rank ASC
+     LIMIT 5`
+  ).bind(gameId).all<{
+    player_name: string; rank: number; net_worth: number
+    total_seasons: number; game_name: string | null
+  }>()
+
+  const htmlRes = await c.env.ASSETS.fetch(
+    new Request(new URL('/index.html', c.req.url).toString())
+  )
+  const html = await htmlRes.text()
+
+  if (!results.length) {
+    return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8' } })
+  }
+
+  const winner   = results[0]
+  const gameName = winner.game_name ?? 'Prohibition'
+  const title    = `${winner.player_name} won ${gameName}! $${winner.net_worth.toLocaleString()}`
+  const podium   = results.slice(0, 3)
+    .map(p => `${p.rank}. ${p.player_name} $${p.net_worth.toLocaleString()}`)
+    .join(' · ')
+  const desc  = `${podium} — ${winner.total_seasons} seasons of Prohibition-era bootlegging.`
+  const origin  = new URL(c.req.url).origin
+  const imgUrl  = `${origin}/screenshot.jpg`
+  const pageUrl = `${origin}/results/${gameId}`
+
+  const ogTags = `
+  <meta property="og:type"         content="website" />
+  <meta property="og:site_name"    content="Prohibitioner" />
+  <meta property="og:url"          content="${escHtml(pageUrl)}" />
+  <meta property="og:title"        content="${escHtml(title)}" />
+  <meta property="og:description"  content="${escHtml(desc)}" />
+  <meta property="og:image"        content="${escHtml(imgUrl)}" />
+  <meta name="twitter:card"        content="summary_large_image" />
+  <meta name="twitter:title"       content="${escHtml(title)}" />
+  <meta name="twitter:description" content="${escHtml(desc)}" />
+  <meta name="twitter:image"       content="${escHtml(imgUrl)}" />`
+
+  const injected = html
+    .replace('<title>Prohibitioner</title>', `<title>${escHtml(title)}</title>`)
+    .replace('</head>', ogTags + '\n  </head>')
+
+  return new Response(injected, { headers: { 'content-type': 'text/html; charset=utf-8' } })
+})
+
 // Serve static assets; fall back to index.html for SPA client-side routes
 app.all('*', async (c) => {
   const res = await c.env.ASSETS.fetch(c.req.raw)

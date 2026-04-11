@@ -29,6 +29,7 @@ export async function recordLeaderboardEntries(
     { results: avgPrices },
     { results: failedMissions },
     { results: jailStats },
+    { results: turnTimings },
   ] = await Promise.all([
     db.prepare(
       `SELECT gp.id, gp.user_id, COALESCE(gp.display_name, u.email) AS name,
@@ -75,6 +76,13 @@ export async function recordLeaderboardEntries(
        WHERE gp.game_id = ? AND gp.is_npc = 0
        GROUP BY gp.id`
     ).bind(gameId).all<{ player_id: number; total_jailed: number }>(),
+    db.prepare(
+      `SELECT t.player_id, CAST(ROUND(AVG(t.duration_seconds)) AS INTEGER) AS avg_seconds
+       FROM turns t
+       JOIN game_players gp ON gp.id = t.player_id
+       WHERE gp.game_id = ? AND t.duration_seconds IS NOT NULL AND gp.is_npc = 0
+       GROUP BY t.player_id`
+    ).bind(gameId).all<{ player_id: number; avg_seconds: number }>(),
   ])
 
   const priceMap = new Map(avgPrices.map(p => [p.alcohol_type, Math.round(p.avg_price)]))
@@ -92,7 +100,8 @@ export async function recordLeaderboardEntries(
         .reduce((s, c) => s + (c.claim_cost ?? 0), 0)
       const failedCount = failedMissions.find(f => f.player_id === p.id)?.cnt ?? 0
       const jailedSeasons = jailStats.find(j => j.player_id === p.id)?.total_jailed ?? 0
-      return { ...p, netWorth: Math.round(p.cash + invVal + distVal + vehVal + cityVal), failedCount, jailedSeasons }
+      const avgTurnSeconds = turnTimings.find(t => t.player_id === p.id)?.avg_seconds ?? null
+      return { ...p, netWorth: Math.round(p.cash + invVal + distVal + vehVal + cityVal), failedCount, jailedSeasons, avgTurnSeconds }
     })
     .sort((a, b) => b.netWorth - a.netWorth)
 
@@ -101,8 +110,8 @@ export async function recordLeaderboardEntries(
   await db.batch(scored.map((p, i) =>
     db.prepare(
       `INSERT OR IGNORE INTO leaderboard_entries
-         (game_id, user_id, player_name, character_class, rank, net_worth, total_seasons, failed_missions, seasons_jailed)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(gameId, p.user_id, p.name, p.character_class, i + 1, p.netWorth, totalSeasons, p.failedCount, p.jailedSeasons)
+         (game_id, user_id, player_name, character_class, rank, net_worth, total_seasons, failed_missions, seasons_jailed, avg_turn_seconds)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(gameId, p.user_id, p.name, p.character_class, i + 1, p.netWorth, totalSeasons, p.failedCount, p.jailedSeasons, p.avgTurnSeconds)
   ))
 }

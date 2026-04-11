@@ -13,7 +13,7 @@ const HIGHLIGHTS = [
 
 export default function WelcomeDialog({ onBeginTour, onSkip }: Props) {
   return (
-    <div className="fixed inset-0 z-[9980] flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[99980] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/85" />
 
       <div className="relative w-full max-w-lg bg-stone-900 border border-amber-700/60 rounded-2xl shadow-2xl overflow-hidden"
@@ -27,7 +27,7 @@ export default function WelcomeDialog({ onBeginTour, onSkip }: Props) {
 
           <p className="text-stone-300 text-sm leading-relaxed text-center mb-4">
             The goal of the game is to amass as much wealth as possible by producing and selling alcohol. 
-            Each turn represents a season — you have 52 seasons (turns) to compete for the most wealth.
+            Each turn represents a season — you have up to 52 seasons (turns) to compete for the most wealth.
           </p>
 
           <div className="space-y-2 mb-5">

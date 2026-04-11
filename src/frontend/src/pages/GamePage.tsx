@@ -13,6 +13,7 @@ import JailOverlay      from '../components/JailOverlay'
 import CityDetailDialog     from '../components/CityDetailDialog'
 import CelebrationDialog, { type Celebration } from '../components/CelebrationDialog'
 import NetWorthDialog from '../components/NetWorthDialog'
+import LedgerDialog from '../components/LedgerDialog'
 import ChatPanel from '../components/ChatPanel'
 import CityMapDialog from '../components/CityMapDialog'
 import DrinkDialog from '../components/DrinkDialog'
@@ -53,10 +54,29 @@ function getSeasonLabel(season: number, totalSeasons = 52): string {
 
 const PLAYER_COLORS = ['#ef4444', '#3b82f6', '#22c55e', '#f97316', '#a855f7']
 
+// ── Turn Timer ─────────────────────────────────────────────────────────────
+function TurnTimer({ startedAt }: { startedAt: string | null }) {
+  const [elapsed, setElapsed] = useState(0)
+  useEffect(() => {
+    if (!startedAt) return
+    const update = () => setElapsed(Math.floor((Date.now() - new Date(startedAt + 'Z').getTime()) / 1000))
+    update()
+    const id = setInterval(update, 1000)
+    return () => clearInterval(id)
+  }, [startedAt])
+  if (!startedAt) return null
+  const h = Math.floor(elapsed / 3600)
+  const m = Math.floor((elapsed % 3600) / 60)
+  const s = elapsed % 60
+  const display = h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s}s` : `${s}s`
+  return <span className="text-xs text-amber-400 ml-1">({display})</span>
+}
+
 // ── Types ──────────────────────────────────────────────────────────────────
 interface PlayerInfo {
   id: number; turnOrder: number; characterClass: string
   isNpc: boolean; currentCityId: number | null; name: string
+  turnStartedAt: string | null
 }
 
 interface VehicleState {
@@ -69,7 +89,7 @@ interface FullState {
   game: {
     status: string; currentSeason: number; totalSeasons: number
     currentPlayerIndex: number; turnDeadline: string | null
-    inviteCode: string; gameName: string | null; isHost: boolean; maxPlayers: number
+    inviteCode: string; gameName: string | null; isHost: boolean; maxPlayers: number; isPublic: boolean
   }
   player: {
     id: number; turnOrder: number; characterClass: string
@@ -87,7 +107,7 @@ interface FullState {
     vehicles: VehicleState[]
     distilleryCityIds: number[]
     bribedCityIds: number[]
-    distilleries: Array<{ id: number; cityId: number; tier: number; primaryAlcohol: string; cityName: string }>
+    distilleries: Array<{ id: number; cityId: number; tier: number; primaryAlcohol: string; cityName: string; isCoastal: boolean }>
     missions: Array<{ id: number; cardId: number; progress: Record<string, unknown>; assignedSeason: number }>
     completedMissions: number
     totalCashEarned: number
@@ -332,6 +352,7 @@ export default function GamePage() {
   const [distilleriesOpen, setDistilleriesOpen] = useState(false)
   const [vehiclesOpen, setVehiclesOpen] = useState(false)
   const [netWorthOpen, setNetWorthOpen] = useState(false)
+  const [ledgerOpen, setLedgerOpen] = useState(false)
   const [turnPending, setTurnPending] = useState(false)
   const [cityMapOpen, setCityMapOpen] = useState(false)
   const [showYourTurnDialog, setShowYourTurnDialog] = useState(false)
@@ -635,10 +656,19 @@ export default function GamePage() {
   const homeCity = player?.homeCityId != null
     ? mapCities.find(c => c.id === player.homeCityId) ?? null
     : null
-  const STILL_OUTPUT: Record<number, number> = { 1: 2, 2: 4, 3: 7, 4: 11, 5: 17 }
+  const STILL_BASE_OUTPUT: Record<number, number> = { 1: 2, 2: 4, 3: 7, 4: 11, 5: 17 }
   const STILL_UPGRADE_COST: Record<number, number> = { 1: 200, 2: 500, 3: 1000, 4: 2000, 5: 4000 }
+  const PROD_MULT: Record<string, number> = { union_leader: 1.2, socialite: 0.8, vixen: 0.9, npc_industrialist: 1.1 }
+  const COASTAL_MULT: Record<string, number> = { rum_runner: 2.0 }
+  function stillOutput(tier: number, isCoastal: boolean): number {
+    const base = STILL_BASE_OUTPUT[tier] ?? 4
+    const charClass = player?.characterClass ?? ''
+    const prod = PROD_MULT[charClass] ?? 1.0
+    const coastal = isCoastal ? (COASTAL_MULT[charClass] ?? 1.0) : 1.0
+    return Math.floor(base * prod * coastal)
+  }
   const homeDistillery = (player?.distilleries ?? []).find(d => d.cityId === player?.homeCityId) ?? null
-  const homeProduction = homeDistillery ? (STILL_OUTPUT[homeDistillery.tier] ?? 4) : 0
+  const homeProduction = homeDistillery ? stillOutput(homeDistillery.tier, homeDistillery.isCoastal) : 0
 
   // City stockpile: city_id → total units available
   const cityStockpileTotal = React.useMemo(() => {
@@ -1135,6 +1165,33 @@ export default function GamePage() {
                 )}
               </div>
 
+              {/* Visibility toggle — host only */}
+              {game.isHost && (
+                <div className="px-4 py-3 border-b border-stone-800">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-stone-500 uppercase tracking-widest font-bold">Visibility</p>
+                      <p className="text-xs text-stone-600 mt-0.5">
+                        {game.isPublic ? 'Anyone can find and join this game' : 'Only people with the invite code can join'}
+                      </p>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        await fetch(`/api/games/${gameId}/visibility`, {
+                          method: 'PATCH',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ isPublic: !game.isPublic }),
+                        })
+                        fetchAll()
+                      }}
+                      className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${game.isPublic ? 'bg-amber-500' : 'bg-stone-700'}`}
+                    >
+                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${game.isPublic ? 'translate-x-5' : 'translate-x-0'}`} />
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Players readiness */}
               <div className="px-4 pt-3 pb-1">
                 <p className="text-xs text-stone-500 uppercase tracking-widest font-bold mb-2">Players</p>
@@ -1299,6 +1356,15 @@ export default function GamePage() {
             title="Standings"
           >
             🏆
+          </button>
+        )}
+        {gameId && (
+          <button
+            onClick={() => setLedgerOpen(true)}
+            className="flex items-center gap-1 px-2 py-1 rounded bg-stone-700 hover:bg-stone-600 text-stone-300 hover:text-amber-400 text-xs transition flex-shrink-0"
+            title="Ledger"
+          >
+            📒
           </button>
         )}
         <button
@@ -1468,7 +1534,7 @@ export default function GamePage() {
                           </div>
                           <p className="text-stone-400 mt-0.5 capitalize">
                             <span className="text-green-400 font-semibold">{d.primaryAlcohol}</span>
-                            {' · '}+{STILL_OUTPUT[d.tier] ?? 4} units/season
+                            {' · '}+{stillOutput(d.tier, d.isCoastal)} units/season
                           </p>
                           <div className="mt-1.5 flex gap-0.5">
                             {Array.from({ length: 5 }, (_, i) => (
@@ -1527,6 +1593,11 @@ export default function GamePage() {
         {/* Net worth dialog */}
         {netWorthOpen && gameId && (
           <NetWorthDialog gameId={gameId} onClose={() => setNetWorthOpen(false)} />
+        )}
+
+        {/* Ledger dialog */}
+        {ledgerOpen && gameId && (
+          <LedgerDialog gameId={gameId} onClose={() => setLedgerOpen(false)} />
         )}
 
         {/* City Map dialog */}
@@ -2389,6 +2460,9 @@ export default function GamePage() {
                   >
                     {p.name}{p.isNpc ? ' (NPC)' : ''}
                     {p.turnOrder === game?.currentPlayerIndex ? ' ●' : ''}
+                    {p.turnOrder === game?.currentPlayerIndex && !p.isNpc && (
+                      <TurnTimer startedAt={p.turnStartedAt} />
+                    )}
                   </button>
                 </div>
               ))}

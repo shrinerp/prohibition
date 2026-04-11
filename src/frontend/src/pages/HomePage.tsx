@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { capture } from '../analytics'
 
 export default function HomePage() {
   const nav = useNavigate()
   const [loggedIn, setLoggedIn] = useState<boolean | null>(null)
 
   useEffect(() => {
+    capture('page_view', { page: 'home' })
     fetch('/api/games')
       .then(r => {
         if (r.ok) {
@@ -18,9 +20,9 @@ export default function HomePage() {
   }, [])
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen gap-8 p-8">
-      <div className="flex flex-col items-center gap-4">
-        <img src="/logo.png" alt="Prohibition" className="w-96 h-auto drop-shadow-2xl" />
+    <div className="flex flex-col items-center justify-center min-h-screen gap-4 p-4 landscape:gap-3 landscape:p-3">
+      <div className="flex flex-col items-center gap-3">
+        <img src="/logo.png" alt="Prohibition" className="w-64 landscape:w-48 h-auto drop-shadow-2xl" />
         <p className="text-stone-400 text-lg text-center">
           Build your empire. Outrun the law. Winter 1933 decides it all.
         </p>
@@ -37,18 +39,25 @@ export default function HomePage() {
         <div className="flex gap-4">
           <Link
             to="/login"
+            onClick={() => capture('cta_clicked', { action: 'sign_in' })}
             className="px-8 py-3 bg-amber-600 hover:bg-amber-500 text-stone-900 font-bold rounded uppercase tracking-wide transition"
           >
             Sign In
           </Link>
           <Link
             to="/register"
+            onClick={() => capture('cta_clicked', { action: 'register' })}
             className="px-8 py-3 border border-amber-600 hover:bg-amber-900 text-amber-400 font-bold rounded uppercase tracking-wide transition"
           >
             Register
           </Link>
         </div>
       )}
+      <div className="mt-6">
+        <Link to="/how-to-play" className="text-stone-500 hover:text-amber-400 text-sm transition underline underline-offset-2">
+          How to Play
+        </Link>
+      </div>
     </div>
   )
 }

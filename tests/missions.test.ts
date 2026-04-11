@@ -9,28 +9,28 @@ import {
 } from '../src/game/missions'
 
 describe('MISSION_CARDS', () => {
-  it('contains exactly 52 cards', () => {
-    expect(MISSION_CARDS).toHaveLength(52)
+  it('contains exactly 104 cards', () => {
+    expect(MISSION_CARDS).toHaveLength(104)
   })
 
-  it('IDs are 1–52 with no duplicates', () => {
+  it('IDs are 1–104 with no duplicates', () => {
     const ids = MISSION_CARDS.map(c => c.id)
-    expect(ids).toEqual([...Array(52)].map((_, i) => i + 1))
+    expect(ids).toEqual([...Array(104)].map((_, i) => i + 1))
   })
 
-  it('contains 13 cards per tier', () => {
+  it('contains 26 cards per tier', () => {
     const counts = { easy: 0, medium: 0, hard: 0, legendary: 0 }
     for (const card of MISSION_CARDS) counts[card.tier]++
-    expect(counts.easy).toBe(13)
-    expect(counts.medium).toBe(13)
-    expect(counts.hard).toBe(13)
-    expect(counts.legendary).toBe(13)
+    expect(counts.easy).toBe(26)
+    expect(counts.medium).toBe(26)
+    expect(counts.hard).toBe(26)
+    expect(counts.legendary).toBe(26)
   })
 
-  it('easy rewards are 50–138', () => {
+  it('easy rewards are in the easy range', () => {
     for (const card of MISSION_CARDS.filter(c => c.tier === 'easy')) {
       expect(card.reward).toBeGreaterThanOrEqual(50)
-      expect(card.reward).toBeLessThanOrEqual(138)
+      expect(card.reward).toBeLessThanOrEqual(200)
     }
   })
 
@@ -77,31 +77,32 @@ describe('getMissionCard()', () => {
   it('returns card for valid id', () => {
     expect(getMissionCard(1)?.id).toBe(1)
     expect(getMissionCard(52)?.id).toBe(52)
+    expect(getMissionCard(104)?.id).toBe(104)
   })
 
   it('returns undefined for invalid id', () => {
     expect(getMissionCard(0)).toBeUndefined()
-    expect(getMissionCard(53)).toBeUndefined()
+    expect(getMissionCard(105)).toBeUndefined()
   })
 })
 
 describe('shuffleDeck()', () => {
-  it('returns array of 52 IDs', () => {
+  it('returns array of 104 IDs', () => {
     const deck = shuffleDeck()
-    expect(deck).toHaveLength(52)
+    expect(deck).toHaveLength(104)
   })
 
-  it('contains all IDs 1–52', () => {
+  it('contains all IDs 1–104', () => {
     const deck = shuffleDeck()
     const sorted = [...deck].sort((a, b) => a - b)
-    expect(sorted).toEqual([...Array(52)].map((_, i) => i + 1))
+    expect(sorted).toEqual([...Array(104)].map((_, i) => i + 1))
   })
 
   it('produces different orders across calls (probabilistic)', () => {
     const a = shuffleDeck()
     const b = shuffleDeck()
     // Extremely unlikely to be equal if shuffle is working
-    expect(a.join(',')).not.toBe([...Array(52)].map((_, i) => i + 1).join(','))
+    expect(a.join(',')).not.toBe([...Array(104)].map((_, i) => i + 1).join(','))
   })
 })
 
@@ -129,6 +130,7 @@ describe('checkAndCompleteMissions()', () => {
     heat: 15,
     totalCashEarned: 500,
     consecutiveCleanSeasons: 3,
+    maxVehicleStationary: 0,
   }
 
   it('returns empty completedCardIds when no missions held', async () => {

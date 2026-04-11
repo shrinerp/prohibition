@@ -9,7 +9,7 @@ export const ALCOHOL_BASE_PRICES: Record<string, number> = {
   brandy: 28, wine: 18, vermouth: 22, malort: 15
 }
 
-const TIER_MULT: Record<string, number> = { small: 0.9, medium: 1.0, large: 1.1, major: 1.2 }
+const TIER_MULT: Record<string, number> = { small: 0.8, medium: 1.0, large: 1.25, major: 1.5 }
 
 /**
  * Generate (or regenerate) market prices for every city for a given season.
@@ -39,7 +39,10 @@ export async function buildMarketPrices(
   if (stmts.length > 0) await db.batch(stmts)
 }
 
-const STARTING_CASH = 200
+const STARTING_CASH_BY_SEASONS: Record<number, number> = { 13: 2000, 26: 1000, 52: 500 }
+function startingCash(totalSeasons: number): number {
+  return STARTING_CASH_BY_SEASONS[totalSeasons] ?? 500
+}
 const STARTING_ADJUSTMENT_CARDS = 3
 const MIN_CITIES = 12
 const MAX_CITIES = 20
@@ -63,26 +66,54 @@ interface GameResult {
 export class GameService {
   constructor(private env: Env) {}
 
-  async createGame(userId: number): Promise<GameResult> {
+  async createGame(userId: number, totalSeasons = 52, isPublic = false): Promise<GameResult> {
     const gameId = crypto.randomUUID()
     const inviteCode = crypto.randomUUID().split('-')[0].toUpperCase()
 
     await this.env.PROHIBITIONDB.prepare(
-      `INSERT INTO games (id, invite_code, status, host_user_id) VALUES (?, ?, 'lobby', ?)`
-    ).bind(gameId, inviteCode, userId).run()
+      `INSERT INTO games (id, invite_code, status, host_user_id, total_seasons, is_public) VALUES (?, ?, 'lobby', ?, ?, ?)`
+    ).bind(gameId, inviteCode, userId, totalSeasons, isPublic ? 1 : 0).run()
 
     await this.env.PROHIBITIONDB.prepare(
       `INSERT INTO game_players (game_id, user_id, turn_order, character_class, is_npc, cash, heat, adjustment_cards)
        VALUES (?, ?, 0, 'unselected', 0, ?, ?, ?)`
-    ).bind(gameId, userId, STARTING_CASH, 0, STARTING_ADJUSTMENT_CARDS).run()
+    ).bind(gameId, userId, startingCash(totalSeasons), 0, STARTING_ADJUSTMENT_CARDS).run()
 
     return { success: true, gameId, inviteCode }
   }
 
+  async joinPublicGame(gameId: string, userId: number): Promise<GameResult> {
+    const game = await this.env.PROHIBITIONDB.prepare(
+      `SELECT id, status, player_count, max_players, total_seasons, is_public FROM games WHERE id = ?`
+    ).bind(gameId).first<{ id: string; status: string; player_count: number; max_players: number; total_seasons: number; is_public: number }>()
+
+    if (!game) return { success: false, message: 'Game not found' }
+    if (!game.is_public) return { success: false, message: 'This game is private' }
+    if (game.status !== 'lobby') return { success: false, message: 'Game already started' }
+    if (game.player_count >= game.max_players) return { success: false, message: 'Game is full' }
+
+    const already = await this.env.PROHIBITIONDB.prepare(
+      `SELECT id FROM game_players WHERE game_id = ? AND user_id = ?`
+    ).bind(gameId, userId).first()
+    if (already) return { success: false, message: 'Already in this game' }
+
+    const turnOrder = game.player_count
+    await this.env.PROHIBITIONDB.prepare(
+      `INSERT INTO game_players (game_id, user_id, turn_order, character_class, is_npc, cash, heat, adjustment_cards)
+       VALUES (?, ?, ?, 'unselected', 0, ?, ?, ?)`
+    ).bind(game.id, userId, turnOrder, startingCash(game.total_seasons), 0, STARTING_ADJUSTMENT_CARDS).run()
+
+    await this.env.PROHIBITIONDB.prepare(
+      `UPDATE games SET player_count = player_count + 1 WHERE id = ?`
+    ).bind(game.id).run()
+
+    return { success: true, gameId: game.id }
+  }
+
   async joinGame(inviteCode: string, userId: number): Promise<GameResult> {
     const game = await this.env.PROHIBITIONDB.prepare(
-      `SELECT id, status, player_count, max_players FROM games WHERE invite_code = ?`
-    ).bind(inviteCode).first<{ id: string; status: string; player_count: number; max_players: number }>()
+      `SELECT id, status, player_count, max_players, total_seasons FROM games WHERE invite_code = ?`
+    ).bind(inviteCode).first<{ id: string; status: string; player_count: number; max_players: number; total_seasons: number }>()
 
     if (!game) return { success: false, message: 'Game not found' }
     if (game.status !== 'lobby') return { success: false, message: 'Game already started' }
@@ -92,7 +123,7 @@ export class GameService {
     await this.env.PROHIBITIONDB.prepare(
       `INSERT INTO game_players (game_id, user_id, turn_order, character_class, is_npc, cash, heat, adjustment_cards)
        VALUES (?, ?, ?, 'unselected', 0, ?, ?, ?)`
-    ).bind(game.id, userId, turnOrder, STARTING_CASH, 0, STARTING_ADJUSTMENT_CARDS).run()
+    ).bind(game.id, userId, turnOrder, startingCash(game.total_seasons), 0, STARTING_ADJUSTMENT_CARDS).run()
 
     await this.env.PROHIBITIONDB.prepare(
       `UPDATE games SET player_count = player_count + 1 WHERE id = ?`
@@ -117,8 +148,8 @@ export class GameService {
 
   async startGame(gameId: string, userId: number): Promise<GameResult> {
     const game = await this.env.PROHIBITIONDB.prepare(
-      `SELECT id, status, host_user_id, max_players FROM games WHERE id = ?`
-    ).bind(gameId).first<{ id: string; status: string; host_user_id: number; max_players: number }>()
+      `SELECT id, status, host_user_id, max_players, total_seasons FROM games WHERE id = ?`
+    ).bind(gameId).first<{ id: string; status: string; host_user_id: number; max_players: number; total_seasons: number }>()
 
     if (!game) return { success: false, message: 'Game not found' }
     if (game.status !== 'lobby') return { success: false, message: 'Game already started' }
@@ -183,13 +214,15 @@ export class GameService {
     // Shuffle so NPCs get varied names each game
     const shuffledNames = [...NPC_NAMES].sort(() => Math.random() - 0.5)
     let npcNameIndex = 0
+    const NPC_ARCHETYPES = ['npc_merchant', 'npc_expander', 'npc_industrialist'] as const
 
     for (let i = players.length; i < game.max_players; i++) {
       const npcName = shuffledNames[npcNameIndex++ % shuffledNames.length]
+      const archetype = NPC_ARCHETYPES[(i - players.length) % NPC_ARCHETYPES.length]
       await this.env.PROHIBITIONDB.prepare(
         `INSERT INTO game_players (game_id, user_id, turn_order, character_class, is_npc, cash, heat, adjustment_cards, display_name)
-         VALUES (?, NULL, ?, 'npc_syndicate', 1, ?, ?, ?, ?)`
-      ).bind(gameId, i, STARTING_CASH, 0, STARTING_ADJUSTMENT_CARDS, npcName).run()
+         VALUES (?, NULL, ?, ?, 1, ?, ?, ?, ?)`
+      ).bind(gameId, i, archetype, startingCash(game.total_seasons), 0, STARTING_ADJUSTMENT_CARDS, npcName).run()
     }
 
     // Assign home bases — spread players across cities
@@ -216,6 +249,29 @@ export class GameService {
       ).bind(playerId, gameId, cityId).run()
     }
 
+    // Seed season 1 production into city_inventory for all starting distilleries
+    // (mirrors the season rollover production INSERT so NPCs can act immediately in season 1)
+    const { results: seedDistilleries } = await this.env.PROHIBITIONDB.prepare(
+      `SELECT d.city_id, d.tier, cp.primary_alcohol
+       FROM distilleries d
+       JOIN game_players gp ON d.player_id = gp.id
+       JOIN game_cities  gc ON d.city_id   = gc.id
+       JOIN city_pool    cp ON gc.city_pool_id = cp.id
+       WHERE gp.game_id = ?`
+    ).bind(gameId).all<{ city_id: number; tier: number; primary_alcohol: string }>()
+
+    const TIER_OUTPUT: Record<number, number> = { 1: 2, 2: 4, 3: 7, 4: 11, 5: 17 }
+    if (seedDistilleries.length > 0) {
+      await this.env.PROHIBITIONDB.batch(seedDistilleries.map(d =>
+        this.env.PROHIBITIONDB.prepare(
+          `INSERT INTO city_inventory (game_id, city_id, alcohol_type, quantity)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(game_id, city_id, alcohol_type)
+           DO UPDATE SET quantity = quantity + excluded.quantity`
+        ).bind(gameId, d.city_id, d.primary_alcohol, TIER_OUTPUT[d.tier] ?? 2)
+      ))
+    }
+
     // Generate market prices for season 1
     const cityPriceData = gameCities.map(c => ({
       id: c.id, primary_alcohol: c.primary_alcohol,
@@ -233,9 +289,14 @@ export class GameService {
 
     // Assign home bases and set deadline for first turn
     const deadline = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
-    await this.env.PROHIBITIONDB.prepare(
-      `UPDATE games SET status = 'active', current_season = 1, turn_deadline = ? WHERE id = ?`
-    ).bind(deadline, gameId).run()
+    await this.env.PROHIBITIONDB.batch([
+      this.env.PROHIBITIONDB.prepare(
+        `UPDATE games SET status = 'active', current_season = 1, turn_deadline = ? WHERE id = ?`
+      ).bind(deadline, gameId),
+      this.env.PROHIBITIONDB.prepare(
+        `UPDATE game_players SET turn_started_at = datetime('now') WHERE game_id = ? AND turn_order = 0 AND is_npc = 0`
+      ).bind(gameId),
+    ])
 
     return { success: true }
   }

@@ -1,7 +1,5 @@
 import React from 'react'
 
-const MAX_SEASON = 52 // Winter 1933
-
 interface SeasonTimelineProps {
   seasonLabel: string
   currentPlayerName: string
@@ -10,6 +8,7 @@ interface SeasonTimelineProps {
   currentTurnIndex: number
   currentCityName?: string
   currentSeason: number
+  totalSeasons: number
 }
 
 export default function SeasonTimeline({
@@ -18,11 +17,13 @@ export default function SeasonTimeline({
   isMyTurn,
   currentCityName,
   currentSeason,
+  totalSeasons,
 }: SeasonTimelineProps) {
-  const pct     = Math.min(100, Math.round(((currentSeason - 1) / MAX_SEASON) * 100))
+  const seasonsPerYear = totalSeasons / 13
+  const pct     = Math.min(100, Math.round(((currentSeason - 1) / totalSeasons) * 100))
   // 13 segments = one per year (1921–1933)
-  const filled  = Math.floor((currentSeason - 1) / 4)   // complete years elapsed
-  const partial = ((currentSeason - 1) % 4) / 4         // fraction through current year
+  const filled  = Math.floor((currentSeason - 1) / seasonsPerYear)   // complete years elapsed
+  const partial = ((currentSeason - 1) % seasonsPerYear) / seasonsPerYear  // fraction through current year
 
   return (
     <div className="bg-stone-800 border border-stone-600 rounded p-1.5 space-y-1">

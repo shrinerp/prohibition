@@ -44,8 +44,8 @@ interface SvgMapProps {
   onCityClick?: (cityId: number) => void
 }
 
-const SVG_W = 800
-const SVG_H = 480
+export const SVG_W = 800
+export const SVG_H = 480
 const PAD  = 20
 
 // Pre-compute once at module load — continental US only (exclude Alaska=2, Hawaii=15)
@@ -67,7 +67,7 @@ const pathGen = geoPath().projection(projection)
 const NATION_D = pathGen(nationGeo) ?? ''
 const STATES_D = pathGen(stateMesh) ?? ''
 
-function project(lat: number, lon: number): { x: number; y: number } | null {
+export function projectLatLon(lat: number, lon: number): { x: number; y: number } | null {
   const coords = projection([lon, lat])
   return coords ? { x: coords[0], y: coords[1] } : null
 }
@@ -76,7 +76,7 @@ export default function SvgMap({ cities, roads, playerTokens, currentCityId, hom
   const positions = useMemo(() => {
     const map = new Map<number, { x: number; y: number }>()
     for (const city of cities) {
-      const pos = project(city.lat, city.lon)
+      const pos = projectLatLon(city.lat, city.lon)
       if (pos) map.set(city.id, pos)
     }
     return map
@@ -209,7 +209,7 @@ export default function SvgMap({ cities, roads, playerTokens, currentCityId, hom
         const offsetX = (i % 3 - 1) * 10
         return (
           <circle
-            key={token.playerId}
+            key={`${token.playerId}-${token.cityId}-${i}`}
             cx={pos.x + offsetX} cy={pos.y - 14} r={5}
             fill={token.color}
             stroke={token.isMe ? '#fff' : '#555'}

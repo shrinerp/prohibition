@@ -94,22 +94,22 @@ export function rollPoliceEncounter(currentHeat: number): boolean {
 
 /**
  * Resolve a Submit choice.
- * Low heat (<30): nothing found.
- * High heat (>=50): seize all alcohol + 50% cash.
- * Mid heat (30-49): seize half alcohol, no cash.
+ * Low heat (<30): nothing found, small heat drop.
+ * High heat (>=50): seize all alcohol + 50% cash — big heat drop commensurate with the penalty.
+ * Mid heat (30-49): seize half alcohol, moderate heat drop.
  */
 export function resolveSubmit(currentHeat: number, alcoholUnits: number, cashOnHand: number): SubmitResult {
   if (currentHeat < 30) {
-    return { alcoholSeized: 0, cashSeized: 0, heatDelta: -5 }
+    return { alcoholSeized: 0, cashSeized: 0, heatDelta: -10 }
   }
   if (currentHeat >= 50) {
     return {
       alcoholSeized: alcoholUnits,
       cashSeized:    alcoholUnits > 0 ? Math.floor(cashOnHand * 0.5) : 0,
-      heatDelta:     -10
+      heatDelta:     -30
     }
   }
-  return { alcoholSeized: Math.floor(alcoholUnits / 2), cashSeized: 0, heatDelta: -5 }
+  return { alcoholSeized: Math.floor(alcoholUnits / 2), cashSeized: 0, heatDelta: -15 }
 }
 
 /** Resolve a spot Bribe — pay and go. */

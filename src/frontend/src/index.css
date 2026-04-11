@@ -14,3 +14,27 @@ html, body, #root {
     display: flex !important;
   }
 }
+
+/* ── Turn transition: beer fill ───────────────────────────────────────────── */
+@keyframes beerFill {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+
+@keyframes bubbleRise {
+  0%   { transform: translateY(0) translateX(0); opacity: 0.6; }
+  40%  { opacity: 0.85; }
+  100% { transform: translateY(-110vh) translateX(var(--bubble-drift, 8px)); opacity: 0; }
+}
+
+@keyframes foamSettle {
+  0%   { transform: scaleX(0.5); opacity: 0; }
+  70%  { transform: scaleX(1.04); opacity: 1; }
+  100% { transform: scaleX(1); opacity: 1; }
+}
+
+/* Fixes missing definition referenced in TrapDialog.tsx */
+@keyframes fadeScaleIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
