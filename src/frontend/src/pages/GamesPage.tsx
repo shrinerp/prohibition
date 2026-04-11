@@ -56,7 +56,8 @@ export default function GamesPage() {
   const [inviteCode, setInviteCode] = useState(searchParams.get('invite') ?? '')
   const [error, setError] = useState('')
   const [games, setGames] = useState<GameEntry[]>([])
-  const [timedOut, setTimedOut] = useState<Array<{ name: string; reason: string }>>([])
+  const [timedOut, setTimedOut] = useState<Array<{ name: string; reason: string; id: number }>>([])
+  const [bootedVisible, setBootedVisible] = useState(true)
   const [loading, setLoading] = useState(true)
   const [newGameSeasons, setNewGameSeasons] = useState(52)
   const [newGamePublic, setNewGamePublic] = useState(false)
@@ -72,7 +73,8 @@ export default function GamesPage() {
       .then((data: { success: boolean; games: GameEntry[]; timedOutGames?: Array<{ name: string; reason: string }>; isAdmin?: boolean }) => {
         if (data.success) {
           setGames(data.games)
-          setTimedOut(data.timedOutGames ?? [])
+          setTimedOut((data.timedOutGames ?? []).map((t, i) => ({ ...t, id: i })))
+          setBootedVisible(true)
           setIsAdmin(data.isAdmin ?? false)
           capture('page_view', { page: 'games', active_games: data.games.filter((g: GameEntry) => g.status !== 'ended').length })
         }
@@ -93,6 +95,14 @@ export default function GamesPage() {
       })
       .catch(() => {})
   }, [])
+
+  // Auto-dismiss booted toasts after 6 seconds
+  useEffect(() => {
+    const booted = timedOut.filter(t => t.reason === 'booted')
+    if (!booted.length || !bootedVisible) return
+    const timer = setTimeout(() => setBootedVisible(false), 6000)
+    return () => clearTimeout(timer)
+  }, [timedOut, bootedVisible])
 
   async function createGame() {
     setError('')
@@ -148,6 +158,29 @@ export default function GamesPage() {
 
   return (
     <div className="min-h-screen p-4 md:p-6">
+
+      {/* Booted toast — fixed banner, auto-dismisses after 6 s */}
+      {bootedVisible && timedOut.filter(t => t.reason === 'booted').map(t => (
+        <div
+          key={t.id}
+          className="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-full max-w-md px-4"
+        >
+          <div className="bg-red-950 border border-red-700 rounded-xl px-5 py-4 shadow-2xl flex items-start gap-4">
+            <span className="text-2xl leading-none mt-0.5">🥾</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-red-300 font-bold text-sm">You were booted</p>
+              <p className="text-red-400 text-sm mt-0.5">
+                You've been removed from <span className="font-semibold text-red-200">{t.name}</span>. Sorry, not sorry.
+              </p>
+            </div>
+            <button
+              onClick={() => setBootedVisible(false)}
+              className="text-red-600 hover:text-red-300 text-xl leading-none flex-shrink-0 cursor-pointer mt-0.5"
+              aria-label="Dismiss"
+            >×</button>
+          </div>
+        </div>
+      ))}
 
       {/* App header — logo left, links right */}
       <div className="max-w-4xl mx-auto flex items-center justify-between mb-6">
@@ -329,17 +362,14 @@ export default function GamesPage() {
         {/* Column 2 — Active & Completed Games */}
         <div className="space-y-3">
 
-          {/* Timed-out / booted notices */}
-          {timedOut.map((t, i) => (
+          {/* Inactivity notices (subtle inline) */}
+          {timedOut.filter(t => t.reason !== 'booted').map((t, i) => (
             <div
-              key={i}
+              key={t.id}
               className="bg-stone-800/60 border border-stone-700 rounded-lg px-3 py-2.5 flex items-start justify-between gap-3"
             >
               <p className="text-stone-500 text-xs">
-                {t.reason === 'booted'
-                  ? <>You were booted from <span className="text-stone-400 font-semibold">{t.name}</span>. Sorry, not sorry.</>
-                  : <><span className="text-stone-400 font-semibold">{t.name}</span> was removed after 7 days of inactivity.</>
-                }
+                <span className="text-stone-400 font-semibold">{t.name}</span> was removed after 7 days of inactivity.
               </p>
               <button
                 onClick={() => setTimedOut(prev => prev.filter((_, j) => j !== i))}
