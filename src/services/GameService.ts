@@ -61,6 +61,9 @@ interface GameResult {
   message?: string
   gameId?: string
   inviteCode?: string
+  isFull?: boolean
+  hostUserId?: number
+  gameName?: string
 }
 
 export class GameService {
@@ -84,8 +87,8 @@ export class GameService {
 
   async joinPublicGame(gameId: string, userId: number): Promise<GameResult> {
     const game = await this.env.PROHIBITIONDB.prepare(
-      `SELECT id, status, player_count, max_players, total_seasons, is_public FROM games WHERE id = ?`
-    ).bind(gameId).first<{ id: string; status: string; player_count: number; max_players: number; total_seasons: number; is_public: number }>()
+      `SELECT id, status, player_count, max_players, total_seasons, is_public, host_user_id, game_name FROM games WHERE id = ?`
+    ).bind(gameId).first<{ id: string; status: string; player_count: number; max_players: number; total_seasons: number; is_public: number; host_user_id: number; game_name: string | null }>()
 
     if (!game) return { success: false, message: 'Game not found' }
     if (!game.is_public) return { success: false, message: 'This game is private' }
@@ -107,13 +110,19 @@ export class GameService {
       `UPDATE games SET player_count = player_count + 1 WHERE id = ?`
     ).bind(game.id).run()
 
-    return { success: true, gameId: game.id }
+    return {
+      success: true,
+      gameId: game.id,
+      isFull: game.player_count + 1 >= game.max_players,
+      hostUserId: game.host_user_id,
+      gameName: game.game_name ?? undefined,
+    }
   }
 
   async joinGame(inviteCode: string, userId: number): Promise<GameResult> {
     const game = await this.env.PROHIBITIONDB.prepare(
-      `SELECT id, status, player_count, max_players, total_seasons FROM games WHERE invite_code = ?`
-    ).bind(inviteCode).first<{ id: string; status: string; player_count: number; max_players: number; total_seasons: number }>()
+      `SELECT id, status, player_count, max_players, total_seasons, host_user_id, game_name FROM games WHERE invite_code = ?`
+    ).bind(inviteCode).first<{ id: string; status: string; player_count: number; max_players: number; total_seasons: number; host_user_id: number; game_name: string | null }>()
 
     if (!game) return { success: false, message: 'Game not found' }
     if (game.status !== 'lobby') return { success: false, message: 'Game already started' }
@@ -129,7 +138,13 @@ export class GameService {
       `UPDATE games SET player_count = player_count + 1 WHERE id = ?`
     ).bind(game.id).run()
 
-    return { success: true, gameId: game.id }
+    return {
+      success: true,
+      gameId: game.id,
+      isFull: game.player_count + 1 >= game.max_players,
+      hostUserId: game.host_user_id,
+      gameName: game.game_name ?? undefined,
+    }
   }
 
   async selectCharacter(gameId: string, userId: number, characterClass: string): Promise<GameResult> {

@@ -96,14 +96,38 @@ gamesRouter.post('/join', async (c) => {
   const userId = c.get('userId')
 
   // Join by gameId (public lobby) or invite code (private)
-  if (body.gameId) {
-    const result = await svc.joinPublicGame(body.gameId, userId)
-    if (!result.success) return c.json({ success: false, message: result.message }, 400)
-    return c.json({ success: true, gameId: result.gameId })
+  const result = body.gameId
+    ? await svc.joinPublicGame(body.gameId, userId)
+    : await svc.joinGame(body.inviteCode ?? '', userId)
+
+  if (!result.success) return c.json({ success: false, message: result.message }, 400)
+
+  // Notify host if the lobby just filled (non-blocking)
+  if (result.isFull && result.hostUserId && result.gameId) {
+    const gameName = result.gameName ?? 'your game'
+    const gameUrl  = `https://game.prohibitioner.com/games/${result.gameId}`
+    c.executionCtx.waitUntil((async () => {
+      const hostRow = await c.env.PROHIBITIONDB.prepare(
+        `SELECT email FROM users WHERE id = ?`
+      ).bind(result.hostUserId).first<{ email: string }>()
+      await Promise.all([
+        sendPushToUser(
+          c.env.PROHIBITIONDB,
+          result.hostUserId!,
+          { title: `${gameName} is full!`, body: 'All players have joined. You can start the game.', url: gameUrl },
+          c.env,
+        ),
+        hostRow ? c.env.EMAIL.send({
+          to: hostRow.email,
+          from: 'game@prohibitioner.com',
+          subject: `${gameName} is full — ready to start!`,
+          html: `<p>All players have joined <strong>${gameName}</strong>. Head back to the lobby to start the game.</p><p><a href="${gameUrl}">Open lobby →</a></p>`,
+          text: `All players have joined ${gameName}. Head back to the lobby to start the game.\n\n${gameUrl}`,
+        }) : Promise.resolve(),
+      ])
+    })())
   }
 
-  const result = await svc.joinGame(body.inviteCode ?? '', userId)
-  if (!result.success) return c.json({ success: false, message: result.message }, 400)
   return c.json({ success: true, gameId: result.gameId })
 })
 
@@ -130,9 +154,41 @@ gamesRouter.post('/:id/character', async (c) => {
 })
 
 gamesRouter.post('/:id/start', async (c) => {
+  const gameId = c.req.param('id')
   const svc = new GameService(c.env)
-  const result = await svc.startGame(c.req.param('id'), c.get('userId'))
+  const result = await svc.startGame(gameId, c.get('userId'))
   if (!result.success) return c.json({ success: false, message: result.message }, 400)
+
+  // Notify all human players that the game has started (non-blocking)
+  c.executionCtx.waitUntil((async () => {
+    const { results: players } = await c.env.PROHIBITIONDB.prepare(
+      `SELECT gp.user_id, u.email, COALESCE(gp.display_name, u.email) AS name, g.game_name
+       FROM game_players gp
+       JOIN users u ON u.id = gp.user_id
+       JOIN games g ON g.id = gp.game_id
+       WHERE gp.game_id = ? AND gp.is_npc = 0`
+    ).bind(gameId).all<{ user_id: number; email: string; name: string; game_name: string | null }>()
+
+    const gameName = players[0]?.game_name ?? 'Prohibition'
+    const gameUrl  = `https://game.prohibitioner.com/games/${gameId}`
+
+    await Promise.all(players.flatMap(p => [
+      sendPushToUser(
+        c.env.PROHIBITIONDB,
+        p.user_id,
+        { title: `${gameName} has started!`, body: 'The game is on — may the best bootlegger win.', url: gameUrl },
+        c.env,
+      ),
+      c.env.EMAIL.send({
+        to: p.email,
+        from: 'game@prohibitioner.com',
+        subject: `${gameName} has started!`,
+        html: `<p>The game is on, ${p.name}. May the best bootlegger win.</p><p><a href="${gameUrl}">Play now →</a></p>`,
+        text: `The game is on, ${p.name}. May the best bootlegger win.\n\n${gameUrl}`,
+      }),
+    ]))
+  })())
+
   return c.json({ success: true })
 })
 
