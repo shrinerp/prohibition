@@ -56,7 +56,7 @@ export default function GamesPage() {
   const [inviteCode, setInviteCode] = useState(searchParams.get('invite') ?? '')
   const [error, setError] = useState('')
   const [games, setGames] = useState<GameEntry[]>([])
-  const [timedOut, setTimedOut] = useState<string[]>([])
+  const [timedOut, setTimedOut] = useState<Array<{ name: string; reason: string }>>([])
   const [loading, setLoading] = useState(true)
   const [newGameSeasons, setNewGameSeasons] = useState(52)
   const [newGamePublic, setNewGamePublic] = useState(false)
@@ -69,7 +69,7 @@ export default function GamesPage() {
   useEffect(() => {
     fetch('/api/games')
       .then(r => r.json())
-      .then((data: { success: boolean; games: GameEntry[]; timedOutGames?: string[]; isAdmin?: boolean }) => {
+      .then((data: { success: boolean; games: GameEntry[]; timedOutGames?: Array<{ name: string; reason: string }>; isAdmin?: boolean }) => {
         if (data.success) {
           setGames(data.games)
           setTimedOut(data.timedOutGames ?? [])
@@ -329,14 +329,17 @@ export default function GamesPage() {
         {/* Column 2 — Active & Completed Games */}
         <div className="space-y-3">
 
-          {/* Timed-out notices */}
-          {timedOut.map((name, i) => (
+          {/* Timed-out / booted notices */}
+          {timedOut.map((t, i) => (
             <div
               key={i}
               className="bg-stone-800/60 border border-stone-700 rounded-lg px-3 py-2.5 flex items-start justify-between gap-3"
             >
               <p className="text-stone-500 text-xs">
-                <span className="text-stone-400 font-semibold">{name}</span> was removed after 7 days of inactivity.
+                {t.reason === 'booted'
+                  ? <>You were booted from <span className="text-stone-400 font-semibold">{t.name}</span>. Sorry, not sorry.</>
+                  : <><span className="text-stone-400 font-semibold">{t.name}</span> was removed after 7 days of inactivity.</>
+                }
               </p>
               <button
                 onClick={() => setTimedOut(prev => prev.filter((_, j) => j !== i))}

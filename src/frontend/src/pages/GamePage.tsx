@@ -814,6 +814,11 @@ export default function GamePage() {
     fetchAll()
   }
 
+  async function bootPlayer(playerRowId: number) {
+    await fetch(`/api/games/${gameId}/players/${playerRowId}`, { method: 'DELETE' })
+    fetchAll()
+  }
+
   async function leaveGame() {
     if (!confirm(game?.isHost ? 'You are the host. Leaving will cancel the game for everyone. Continue?' : 'Leave this lobby?')) return
     await fetch(`/api/games/${gameId}/leave`, { method: 'DELETE' })
@@ -1229,6 +1234,14 @@ export default function GamePage() {
                     <span className={`text-base flex-shrink-0 ${selected ? 'text-green-400' : 'text-stone-600'}`}>
                       {selected ? '✓' : '○'}
                     </span>
+                    {game.isHost && !isMe && (
+                      <button
+                        onClick={() => bootPlayer(p.id)}
+                        className="text-stone-700 hover:text-red-400 text-base leading-none flex-shrink-0 transition cursor-pointer ml-1"
+                        title={`Boot ${p.name}`}
+                        aria-label={`Boot ${p.name}`}
+                      >×</button>
+                    )}
                   </div>
                 )
               })}

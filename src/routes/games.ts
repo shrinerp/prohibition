@@ -40,8 +40,8 @@ gamesRouter.get('/', async (c) => {
       turn_order: number; current_player_index: number; is_my_turn: number
     }>(),
     db.prepare(
-      `SELECT id, game_name FROM game_tombstones WHERE user_id = ? AND seen = 0`
-    ).bind(userId).all<{ id: number; game_name: string | null }>(),
+      `SELECT id, game_name, reason FROM game_tombstones WHERE user_id = ? AND seen = 0`
+    ).bind(userId).all<{ id: number; game_name: string | null; reason: string }>(),
     db.prepare(`SELECT is_admin FROM users WHERE id = ?`).bind(userId).first<{ is_admin: number }>(),
   ])
 
@@ -55,7 +55,7 @@ gamesRouter.get('/', async (c) => {
   return c.json({
     success: true,
     games: gamesResult.results,
-    timedOutGames: tombstonesResult.results.map(t => t.game_name ?? 'Unnamed Game'),
+    timedOutGames: tombstonesResult.results.map(t => ({ name: t.game_name ?? 'Unnamed Game', reason: t.reason ?? 'timeout' })),
     isAdmin: userRow?.is_admin === 1,
   })
 })
@@ -168,6 +168,38 @@ gamesRouter.delete('/:id/leave', async (c) => {
       db.prepare(`UPDATE games SET player_count = player_count - 1 WHERE id = ?`).bind(gameId),
     ])
   }
+
+  return c.json({ success: true })
+})
+
+// Boot a player from the lobby (host only, lobby only)
+gamesRouter.delete('/:id/players/:playerId', async (c) => {
+  const gameId   = c.req.param('id')
+  const playerId = Number(c.req.param('playerId'))
+  const userId   = c.get('userId')
+  const db       = c.env.PROHIBITIONDB
+
+  const game = await db.prepare(
+    `SELECT status, host_user_id, game_name FROM games WHERE id = ?`
+  ).bind(gameId).first<{ status: string; host_user_id: number; game_name: string | null }>()
+
+  if (!game)                        return c.json({ success: false, message: 'Game not found' }, 404)
+  if (game.status !== 'lobby')      return c.json({ success: false, message: 'Can only boot during lobby' }, 400)
+  if (game.host_user_id !== userId) return c.json({ success: false, message: 'Host only' }, 403)
+
+  const target = await db.prepare(
+    `SELECT user_id FROM game_players WHERE id = ? AND game_id = ?`
+  ).bind(playerId, gameId).first<{ user_id: number }>()
+
+  if (!target)                   return c.json({ success: false, message: 'Player not found' }, 404)
+  if (target.user_id === userId) return c.json({ success: false, message: 'Cannot boot yourself' }, 400)
+
+  await db.batch([
+    db.prepare(`DELETE FROM game_players WHERE id = ?`).bind(playerId),
+    db.prepare(`UPDATE games SET player_count = player_count - 1 WHERE id = ?`).bind(gameId),
+    db.prepare(`INSERT INTO game_tombstones (user_id, game_name, reason) VALUES (?, ?, 'booted')`)
+      .bind(target.user_id, game.game_name),
+  ])
 
   return c.json({ success: true })
 })
