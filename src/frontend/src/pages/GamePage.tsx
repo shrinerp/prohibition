@@ -661,6 +661,33 @@ export default function GamePage() {
   const homeCity = player?.homeCityId != null
     ? mapCities.find(c => c.id === player.homeCityId) ?? null
     : null
+
+  // Live net worth = cash + cargo (at avg market price) + vehicles + distilleries + owned cities
+  const liveNetWorth = React.useMemo(() => {
+    if (!player) return 0
+    const DIST_VAL: Record<number, number> = { 1: 50, 2: 175, 3: 425, 4: 900, 5: 1900 }
+    const BASE_PRICES: Record<string, number> = {
+      beer: 15, gin: 25, rum: 20, whiskey: 30, moonshine: 20,
+      vodka: 22, bourbon: 28, rye: 26, scotch: 35, tequila: 24,
+      brandy: 28, wine: 18, vermouth: 22, malort: 15,
+    }
+    // Average market price per alcohol type across all cities
+    const priceAcc: Record<string, { sum: number; n: number }> = {}
+    for (const p of marketPrices) {
+      if (!priceAcc[p.alcoholType]) priceAcc[p.alcoholType] = { sum: 0, n: 0 }
+      priceAcc[p.alcoholType].sum += p.price
+      priceAcc[p.alcoholType].n++
+    }
+    const avgPrice = (type: string) => priceAcc[type]
+      ? Math.round(priceAcc[type].sum / priceAcc[type].n)
+      : (BASE_PRICES[type] ?? 0)
+
+    const cargoVal  = player.vehicles.reduce((s, v) => s + v.inventory.reduce((vs, i) => vs + i.quantity * avgPrice(i.alcohol_type), 0), 0)
+    const vehVal    = player.vehicles.reduce((s, v) => s + (fullState?.vehiclePrices[v.vehicleType] ?? 200), 0)
+    const distVal   = player.distilleries.reduce((s, d) => s + (DIST_VAL[d.tier] ?? 50), 0)
+    const cityVal   = mapCities.filter(c => c.owner_player_id === player.id).reduce((s, c) => s + (c.claim_cost ?? 0), 0)
+    return player.cash + cargoVal + vehVal + distVal + cityVal
+  }, [player, marketPrices, mapCities, fullState?.vehiclePrices])
   const STILL_BASE_OUTPUT: Record<number, number> = { 1: 2, 2: 4, 3: 7, 4: 11, 5: 17 }
   const STILL_UPGRADE_COST: Record<number, number> = { 1: 200, 2: 500, 3: 1000, 4: 2000, 5: 4000 }
   const PROD_MULT: Record<string, number> = { union_leader: 1.2, socialite: 0.8, vixen: 0.9, npc_industrialist: 1.1 }
@@ -1497,16 +1524,17 @@ export default function GamePage() {
               </div>
 
               <div className="bg-stone-800 border border-stone-600 rounded p-3">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs text-stone-400 uppercase tracking-wider">Cash</p>
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-xs text-stone-400 uppercase tracking-wider">Net Worth</p>
                   <button
                     onClick={() => setNetWorthOpen(true)}
                     className="text-xs text-stone-500 hover:text-amber-300 underline underline-offset-2 transition"
                   >
-                    Net Worth
+                    Breakdown
                   </button>
                 </div>
-                <p className="text-2xl font-bold text-green-400">${(player?.cash ?? 0).toLocaleString()}</p>
+                <p className="text-2xl font-bold text-green-400">${liveNetWorth.toLocaleString()}</p>
+                <p className="text-xs text-stone-500 mt-0.5">Cash ${(player?.cash ?? 0).toLocaleString()}</p>
               </div>
 
               {homeCity && (() => {
