@@ -69,15 +69,17 @@ export default function GamesPage() {
 
   useEffect(() => {
     fetch('/api/games')
-      .then(r => r.json())
-      .then((data: { success: boolean; games: GameEntry[]; timedOutGames?: Array<{ name: string; reason: string }>; isAdmin?: boolean }) => {
-        if (data.success) {
-          setGames(data.games)
-          setTimedOut((data.timedOutGames ?? []).map((t, i) => ({ ...t, id: i })))
-          setBootedVisible(true)
-          setIsAdmin(data.isAdmin ?? false)
-          capture('page_view', { page: 'games', active_games: data.games.filter((g: GameEntry) => g.status !== 'ended').length })
-        }
+      .then(r => {
+        if (r.status === 401) { nav('/login?redirect=/games'); return null }
+        return r.json()
+      })
+      .then((data: { success: boolean; games: GameEntry[]; timedOutGames?: Array<{ name: string; reason: string }>; isAdmin?: boolean } | null) => {
+        if (!data?.success) return
+        setGames(data.games)
+        setTimedOut((data.timedOutGames ?? []).map((t, i) => ({ ...t, id: i })))
+        setBootedVisible(true)
+        setIsAdmin(data.isAdmin ?? false)
+        capture('page_view', { page: 'games', active_games: data.games.filter((g: GameEntry) => g.status !== 'ended').length })
       })
       .finally(() => setLoading(false))
 
@@ -128,6 +130,7 @@ export default function GamesPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ inviteCode })
     })
+    if (res.status === 401) { nav('/login?redirect=/games'); return }
     const data = await res.json()
     if (data.success && data.gameId) {
       capture('game_joined', { via: 'invite_code' })
@@ -144,6 +147,7 @@ export default function GamesPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ gameId })
     })
+    if (res.status === 401) { nav('/login?redirect=/games'); return }
     const data = await res.json()
     if (data.success && data.gameId) {
       capture('game_joined', { via: 'public_lobby' })
