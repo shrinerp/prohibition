@@ -24,6 +24,15 @@ authRouter.post('/login', async (c) => {
   return c.json({ success: true })
 })
 
+authRouter.get('/me', async (c) => {
+  const token = getCookie(c, 'session') ?? c.req.header('Authorization')?.replace('Bearer ', '')
+  if (!token) return c.json({ success: false }, 401)
+  const svc = new AuthService(c.env)
+  const userId = await svc.validateSession(token)
+  if (!userId) return c.json({ success: false }, 401)
+  return c.json({ success: true })
+})
+
 authRouter.post('/logout', async (c) => {
   const token = getCookie(c, 'session')
   if (token) {

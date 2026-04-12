@@ -1,5 +1,5 @@
-import React from 'react'
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import React, { useState, useEffect } from 'react'
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
 import HomePage    from './pages/HomePage'
 import LoginPage   from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
@@ -22,6 +22,25 @@ function StagingBanner() {
   )
 }
 
+function RequireAuth({ children }: { children: React.ReactNode }) {
+  const [verified, setVerified] = useState(false)
+  const nav = useNavigate()
+  const location = useLocation()
+
+  useEffect(() => {
+    fetch('/api/auth/me').then(r => {
+      if (r.status === 401) {
+        nav(`/login?redirect=${encodeURIComponent(location.pathname)}`, { replace: true })
+      } else {
+        setVerified(true)
+      }
+    })
+  }, [])
+
+  if (!verified) return null
+  return <>{children}</>
+}
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -31,10 +50,10 @@ export default function App() {
           <Route path="/"            element={<HomePage />} />
           <Route path="/login"       element={<LoginPage />} />
           <Route path="/register"    element={<RegisterPage />} />
-          <Route path="/games"       element={<GamesPage />} />
-          <Route path="/games/:id"   element={<GamePage />} />
-          <Route path="/games/:id/end" element={<EndGamePage />} />
-          <Route path="/admin"       element={<AdminPage />} />
+          <Route path="/games"       element={<RequireAuth><GamesPage /></RequireAuth>} />
+          <Route path="/games/:id"   element={<RequireAuth><GamePage /></RequireAuth>} />
+          <Route path="/games/:id/end" element={<RequireAuth><EndGamePage /></RequireAuth>} />
+          <Route path="/admin"       element={<RequireAuth><AdminPage /></RequireAuth>} />
           <Route path="/how-to-play" element={<HowToPlayPage />} />
           <Route path="/results/:gameId" element={<ShamePage />} />
           <Route path="/shame"       element={<ShamePage />} />
