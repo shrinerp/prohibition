@@ -8,6 +8,7 @@ import VehicleDialog  from '../components/VehicleDialog'
 import StillDialog    from '../components/StillDialog'
 import PoliceDialog   from '../components/PoliceDialog'
 import FedStopDialog  from '../components/FedStopDialog'
+import InformantNetworkDialog from '../components/InformantNetworkDialog'
 import BribeDialog      from '../components/BribeDialog'
 import SeasonTimeline   from '../components/SeasonTimeline'
 import JailOverlay      from '../components/JailOverlay'
@@ -77,7 +78,7 @@ function TurnTimer({ startedAt }: { startedAt: string | null }) {
 interface PlayerInfo {
   id: number; turnOrder: number; characterClass: string
   isNpc: boolean; currentCityId: number | null; name: string
-  turnStartedAt: string | null
+  turnStartedAt: string | null; role: string
 }
 
 interface VehicleState {
@@ -114,6 +115,9 @@ interface FullState {
     totalCashEarned: number
     consecutiveCleanSeasons: number
     claimCostMultiplier: number
+    role: string
+    informants: Array<{ id: number; cityId: number | null; cityName: string | null }>
+    pendingSightings: Array<{ playerName: string; cityId: number; cityName: string; season: number }>
   }
   vehiclePrices: Record<string, number>
   players: PlayerInfo[]
@@ -344,6 +348,7 @@ export default function GamePage() {
   const [viewCityId,   setViewCityId]   = useState<number | null>(null)
   const [policeEncounter, setPoliceEncounter] = useState<{ bribeCost: number; populationTier: string; heat: number } | null>(null)
   const [fedEncounter, setFedEncounter] = useState<{ fineCost: number; jailSeasons: number; cargoUnits: number } | null>(null)
+  const [informantNetworkOpen, setInformantNetworkOpen] = useState(false)
   const [leftOpen,  setLeftOpen]  = useState(true)
   const [rightOpen, setRightOpen] = useState(true)
   const [inviteEmail, setInviteEmail] = useState('')
@@ -1732,6 +1737,33 @@ export default function GamePage() {
           />
         )}
 
+        {/* Informant network dialog — for snitch players */}
+        {informantNetworkOpen && player && fullState && (
+          <InformantNetworkDialog
+            informants={player.informants ?? []}
+            pendingSightings={player.pendingSightings ?? []}
+            mapCities={mapCities.map(c => ({ id: c.id, name: c.name }))}
+            otherPlayers={fullState.players.filter(p => p.id !== player.id).map(p => ({ id: p.id, name: p.name, role: p.role, isNpc: p.isNpc }))}
+            vehicleCityIds={new Set((player.vehicles ?? []).map(v => v.cityId))}
+            currentSeason={game?.currentSeason ?? 1}
+            playerCash={player.cash}
+            isMyTurn={isMyTurn}
+            onClose={() => setInformantNetworkOpen(false)}
+            onPlaceInformant={(informantId, cityId) => {
+              submitTurn([{ type: 'place_informant', vehicleId: informantId, cityId }])
+              setInformantNetworkOpen(false)
+            }}
+            onRecallInformant={(informantId) => {
+              submitTurn([{ type: 'recall_informant', quantity: informantId }])
+              setInformantNetworkOpen(false)
+            }}
+            onFileAccusation={(targetPlayerId, claimedCityIds) => {
+              submitTurn([{ type: 'file_accusation', cityId: targetPlayerId, targetPath: claimedCityIds }])
+              setInformantNetworkOpen(false)
+            }}
+          />
+        )}
+
         {/* Federal stop dialog */}
         {fedEncounter && (
           <FedStopDialog
@@ -2397,6 +2429,43 @@ export default function GamePage() {
                       </button>
                     )
                   })()}
+
+                  {/* ── Snitch actions ── */}
+                  {player?.role === 'snitch' && (
+                    <button
+                      onClick={() => setInformantNetworkOpen(true)}
+                      className="w-full py-2 border border-indigo-700 hover:bg-indigo-900/40 text-indigo-300 font-bold rounded uppercase tracking-wide text-sm transition"
+                    >
+                      🕵️ Informant Network
+                      {(player?.pendingSightings?.length ?? 0) > 0 && (
+                        <span className="ml-1.5 bg-indigo-700 text-white text-xs rounded-full px-1.5 py-0.5 font-black leading-none">
+                          {player.pendingSightings.length}
+                        </span>
+                      )}
+                    </button>
+                  )}
+
+                  {/* ── Counter-snitch tools (bootleggers only) ── */}
+                  {player?.role !== 'snitch' && (
+                    <>
+                      <button
+                        onClick={() => submitTurn([{ type: 'pay_federal_bribe' }])}
+                        className="w-full py-2 border border-stone-600 hover:bg-stone-700 disabled:opacity-40 text-stone-300 font-bold rounded uppercase tracking-wide text-sm transition"
+                        title="Pay $400 — reduces federal stop probability for 4 seasons"
+                      >
+                        🏛 Federal Bribe — $400
+                      </button>
+                      <button
+                        disabled={viewCityId == null || !(player?.vehicles ?? []).some(v => v.cityId === viewCityId)}
+                        onClick={() => submitTurn([{ type: 'sweep_city', cityId: viewCityId ?? undefined }])}
+                        title={viewCityId == null || !(player?.vehicles ?? []).some(v => v.cityId === viewCityId) ? 'Move a car to a city to sweep it for informants' : 'Check selected city for informants ($100–400)'}
+                        className="w-full py-2 border border-stone-600 hover:bg-stone-700 disabled:opacity-40 disabled:cursor-not-allowed text-stone-300 font-bold rounded uppercase tracking-wide text-sm transition"
+                      >
+                        🔍 Sweep City
+                      </button>
+                    </>
+                  )}
+
                   <hr className="border-stone-700" />
                   <p className="text-xs text-stone-500 uppercase tracking-wider">End Turn</p>
                   <button
@@ -2525,23 +2594,57 @@ export default function GamePage() {
             <div className="pt-2 border-t border-stone-700 space-y-1">
               <p className="text-xs text-stone-500 uppercase tracking-wider">Players</p>
               {fullState.players.map((p, i) => (
-                <div key={p.id} className="flex items-center gap-2 text-xs">
-                  <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: PLAYER_COLORS[i % PLAYER_COLORS.length] }} />
-                  <button
-                    onClick={() => {
-                      const charInfo = CHARACTER_DISPLAY[p.characterClass]
-                      if (charInfo) setCharacterPopup(charInfo)
-                    }}
-                    className={`text-left hover:underline transition ${p.id === player?.id ? 'text-amber-400' : 'text-stone-400 hover:text-stone-200'}`}
-                  >
-                    {p.name}{p.isNpc ? ' (NPC)' : ''}
-                    {p.turnOrder === game?.currentPlayerIndex ? ' ●' : ''}
-                    {p.turnOrder === game?.currentPlayerIndex && !p.isNpc && (
-                      <TurnTimer startedAt={p.turnStartedAt} />
-                    )}
-                  </button>
+                <div key={p.id} className="flex items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: PLAYER_COLORS[i % PLAYER_COLORS.length] }} />
+                    <button
+                      onClick={() => {
+                        const charInfo = CHARACTER_DISPLAY[p.characterClass]
+                        if (charInfo) setCharacterPopup(charInfo)
+                      }}
+                      className={`text-left hover:underline transition truncate ${p.id === player?.id ? 'text-amber-400' : 'text-stone-400 hover:text-stone-200'}`}
+                    >
+                      {p.name}{p.isNpc ? ' (NPC)' : ''}
+                      {p.turnOrder === game?.currentPlayerIndex ? ' ●' : ''}
+                      {p.turnOrder === game?.currentPlayerIndex && !p.isNpc && (
+                        <TurnTimer startedAt={p.turnStartedAt} />
+                      )}
+                    </button>
+                  </div>
+                  {/* Finger-snitch button — visible to bootleggers for any other player */}
+                  {isMyTurn && !isInJail && player?.role !== 'snitch' && p.id !== player?.id && (
+                    <button
+                      onClick={() => submitTurn([{ type: 'finger_snitch', cityId: p.id }])}
+                      className="flex-shrink-0 text-xs text-stone-600 hover:text-red-400 border border-stone-700 hover:border-red-800 rounded px-1.5 py-0.5 transition"
+                      title={`Finger ${p.name} as a snitch — $500+`}
+                    >
+                      🫵
+                    </button>
+                  )}
                 </div>
               ))}
+              {/* Buy fed intel — separate from player rows */}
+              {isMyTurn && !isInJail && player?.role !== 'snitch' && fullState.players.some(p => p.id !== player?.id) && (
+                <div className="mt-1.5 space-y-1">
+                  <p className="text-xs text-stone-600 uppercase tracking-wider">Counter-Intel</p>
+                  <select
+                    defaultValue=""
+                    onChange={e => {
+                      if (e.target.value) {
+                        submitTurn([{ type: 'buy_fed_intel', cityId: Number(e.target.value) }])
+                        e.target.value = ''
+                      }
+                    }}
+                    className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs text-stone-400 focus:outline-none"
+                    title="Spend $300 to check if target has active informants"
+                  >
+                    <option value="">🗂 Buy Intel — $300…</option>
+                    {fullState.players.filter(p => p.id !== player?.id).map(p => (
+                      <option key={p.id} value={p.id}>{p.name}{p.isNpc ? ' (NPC)' : ''}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
           )}
 
