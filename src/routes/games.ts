@@ -1446,6 +1446,110 @@ gamesRouter.post('/:id/turn', async (c) => {
       }
     }
 
+    // ── Finger a snitch (bootlegger only, free action) ───────────────────────
+    if (action.type === 'finger_snitch' && playerRow.role !== 'snitch' && action.cityId) {
+      const targetId = action.cityId
+      const failedFingers = await c.env.PROHIBITIONDB.prepare(
+        `SELECT COUNT(*) AS cnt FROM finger_attempts WHERE game_id = ? AND accuser_id = ? AND correct = 0`
+      ).bind(gameId, playerRow.id).first<{ cnt: number }>()
+      const failCount = failedFingers?.cnt ?? 0
+      const cost = Math.round(500 * Math.pow(1.5, failCount))
+
+      if (currentCash >= cost) {
+        currentCash -= cost
+        await c.env.PROHIBITIONDB.prepare(
+          `UPDATE game_players SET cash = cash - ? WHERE id = ?`
+        ).bind(cost, playerRow.id).run()
+
+        const targetRow = await c.env.PROHIBITIONDB.prepare(
+          `SELECT role, cash, COALESCE(display_name, 'Someone') AS name FROM game_players WHERE id = ? AND game_id = ?`
+        ).bind(targetId, gameId).first<{ role: string; cash: number; name: string }>()
+
+        const correct = targetRow?.role === 'snitch'
+        await c.env.PROHIBITIONDB.prepare(
+          `INSERT INTO finger_attempts (game_id, accuser_id, target_id, season, correct) VALUES (?, ?, ?, ?, ?)`
+        ).bind(gameId, playerRow.id, targetId, playerRow.current_season, correct ? 1 : 0).run()
+        addLedger('finger_snitch', -cost, `Finger attempt`, playerRow.current_city_id)
+
+        if (correct) {
+          // Transfer snitch's cash + delete their game presence
+          const snitchCash = targetRow?.cash ?? 0
+          await c.env.PROHIBITIONDB.prepare(
+            `UPDATE game_players SET cash = cash + ? WHERE id = ?`
+          ).bind(snitchCash, playerRow.id).run()
+          await c.env.PROHIBITIONDB.batch([
+            c.env.PROHIBITIONDB.prepare(`DELETE FROM vehicle_inventory WHERE vehicle_id IN (SELECT id FROM vehicles WHERE player_id = ?)`).bind(targetId),
+            c.env.PROHIBITIONDB.prepare(`DELETE FROM vehicles WHERE player_id = ?`).bind(targetId),
+            c.env.PROHIBITIONDB.prepare(`DELETE FROM informants WHERE snitch_id = ?`).bind(targetId),
+            c.env.PROHIBITIONDB.prepare(`UPDATE game_players SET cash = 0, role = 'eliminated' WHERE id = ?`).bind(targetId),
+          ])
+          const accuserName = (playerRow.display_name ?? 'Someone').replace(/@.*$/, '')
+          const snitchName = (targetRow?.name ?? 'Someone').replace(/@.*$/, '')
+          await c.env.PROHIBITIONDB.prepare(
+            `INSERT INTO game_messages (game_id, player_id, message, is_system) VALUES (?, NULL, ?, 1)`
+          ).bind(gameId, `🕵️ ${accuserName} exposed an informant. ${snitchName} has been removed from the game.`).run()
+        } else {
+          // Wrong finger: heat +20
+          const freshHeat = await c.env.PROHIBITIONDB.prepare(
+            `SELECT heat FROM game_players WHERE id = ?`
+          ).bind(playerRow.id).first<{ heat: number }>()
+          const newHeat = Math.min(100, (freshHeat?.heat ?? playerRow.heat) + 20)
+          await c.env.PROHIBITIONDB.prepare(
+            `UPDATE game_players SET heat = ? WHERE id = ?`
+          ).bind(newHeat, playerRow.id).run()
+          // No public announcement on wrong finger
+        }
+      }
+    }
+
+    // ── Sweep city for informants (free action, private result) ──────────────
+    if (action.type === 'sweep_city' && action.cityId) {
+      const sweepCityId = action.cityId
+      const tierRow = await c.env.PROHIBITIONDB.prepare(
+        `SELECT cp.population_tier FROM game_cities gc JOIN city_pool cp ON gc.city_pool_id = cp.id WHERE gc.id = ? AND gc.game_id = ?`
+      ).bind(sweepCityId, gameId).first<{ population_tier: string }>()
+      const { TIER_BRIBE_MULTIPLIER: TBM } = await import('../game/police')
+      const sweepCost = Math.round(100 * (TBM[(tierRow?.population_tier ?? 'small') as PopulationTier] ?? 1.0))
+      if (currentCash >= sweepCost) {
+        currentCash -= sweepCost
+        await c.env.PROHIBITIONDB.prepare(`UPDATE game_players SET cash = cash - ? WHERE id = ?`).bind(sweepCost, playerRow.id).run()
+        addLedger('sweep_city', -sweepCost, `City sweep`, sweepCityId)
+        const informantCheck = await c.env.PROHIBITIONDB.prepare(
+          `SELECT COUNT(*) AS cnt FROM informants WHERE city_id = ? AND game_id = ?`
+        ).bind(sweepCityId, gameId).first<{ cnt: number }>()
+        celebrations.push({ type: 'sweep_result', cityId: sweepCityId, units: informantCheck?.cnt ?? 0 })
+      }
+    }
+
+    // ── Buy fed intel (free action, private result) ───────────────────────────
+    if (action.type === 'buy_fed_intel' && action.cityId) {
+      const targetId = action.cityId
+      const intelCost = 300
+      if (currentCash >= intelCost) {
+        currentCash -= intelCost
+        await c.env.PROHIBITIONDB.prepare(`UPDATE game_players SET cash = cash - ? WHERE id = ?`).bind(intelCost, playerRow.id).run()
+        addLedger('fed_intel', -intelCost, `Fed intel purchase`, playerRow.current_city_id)
+        const activityCheck = await c.env.PROHIBITIONDB.prepare(
+          `SELECT COUNT(*) AS cnt FROM informants WHERE snitch_id = ? AND game_id = ? AND city_id IS NOT NULL`
+        ).bind(targetId, gameId).first<{ cnt: number }>()
+        celebrations.push({ type: 'fed_intel_result', units: activityCheck?.cnt ?? 0 })
+      }
+    }
+
+    // ── Pay federal bribe (free action, reduces fed stop weight) ─────────────
+    if (action.type === 'pay_federal_bribe') {
+      const bribeCost = 400
+      if (currentCash >= bribeCost) {
+        currentCash -= bribeCost
+        const newExpiry = playerRow.current_season + 4
+        await c.env.PROHIBITIONDB.batch([
+          c.env.PROHIBITIONDB.prepare(`UPDATE game_players SET cash = cash - ?, federal_bribe_expires_season = ? WHERE id = ?`)
+            .bind(bribeCost, newExpiry, playerRow.id),
+        ])
+        addLedger('federal_bribe', -bribeCost, `Federal bribe (expires season ${newExpiry})`, playerRow.current_city_id)
+      }
+    }
+
     // ── Recall informant (snitch only, free action) ───────────────────────────
     if (action.type === 'recall_informant' && playerRow.role === 'snitch' && action.quantity) {
       await c.env.PROHIBITIONDB.prepare(
