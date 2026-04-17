@@ -848,6 +848,31 @@ gamesRouter.post('/:id/turn', async (c) => {
             }
           }
         }
+
+        // Informant sighting detection — if any snitch has an informant in destination city, queue a sighting
+        {
+          const { results: watchingInformants } = await c.env.PROHIBITIONDB.prepare(
+            `SELECT i.snitch_id FROM informants i WHERE i.city_id = ? AND i.game_id = ? AND i.snitch_id != ?`
+          ).bind(result.currentCityId, gameId, playerRow.id).all<{ snitch_id: number }>()
+          if (watchingInformants.length > 0) {
+            const cityNameRow = await c.env.PROHIBITIONDB.prepare(
+              `SELECT cp.name FROM game_cities gc JOIN city_pool cp ON gc.city_pool_id = cp.id WHERE gc.id = ?`
+            ).bind(result.currentCityId).first<{ name: string }>()
+            const sightingCityName = cityNameRow?.name ?? 'Unknown'
+            const sightingPlayer = (playerRow.display_name ?? 'Someone').replace(/@.*$/, '')
+            const sighting = { playerName: sightingPlayer, cityId: result.currentCityId, cityName: sightingCityName, season: playerRow.current_season }
+            for (const inf of watchingInformants) {
+              const snitchRow = await c.env.PROHIBITIONDB.prepare(
+                `SELECT pending_sightings FROM game_players WHERE id = ?`
+              ).bind(inf.snitch_id).first<{ pending_sightings: string | null }>()
+              const existingSightings = snitchRow?.pending_sightings ? JSON.parse(snitchRow.pending_sightings) : []
+              existingSightings.push(sighting)
+              await c.env.PROHIBITIONDB.prepare(
+                `UPDATE game_players SET pending_sightings = ? WHERE id = ?`
+              ).bind(JSON.stringify(existingSightings), inf.snitch_id).run()
+            }
+          }
+        }
       }
 
       // Update game_players.current_city_id to first vehicle's final city
@@ -1409,6 +1434,24 @@ gamesRouter.post('/:id/turn', async (c) => {
         }
       }
     }
+
+    // ── Place informant (snitch only, terminal — requires car in city) ─────────
+    if (action.type === 'place_informant' && playerRow.role === 'snitch' && action.vehicleId && action.cityId) {
+      // Verify the snitch has a vehicle in the target city
+      const carInCity = playerVehicles.find(v => v.id === action.vehicleId && v.city_id === action.cityId)
+      if (carInCity) {
+        await c.env.PROHIBITIONDB.prepare(
+          `UPDATE informants SET city_id = ?, placed_at = ? WHERE id = ? AND snitch_id = ? AND game_id = ?`
+        ).bind(action.cityId, playerRow.current_season, action.quantity /* reuse quantity field as informantId */, playerRow.id, gameId).run()
+      }
+    }
+
+    // ── Recall informant (snitch only, free action) ───────────────────────────
+    if (action.type === 'recall_informant' && playerRow.role === 'snitch' && action.quantity) {
+      await c.env.PROHIBITIONDB.prepare(
+        `UPDATE informants SET city_id = NULL, placed_at = NULL WHERE id = ? AND snitch_id = ? AND game_id = ?`
+      ).bind(action.quantity /* informantId */, playerRow.id, gameId).run()
+    }
   }
 
   // ── Check mission completion (after all actions, before turn advance) ──────
@@ -1637,6 +1680,22 @@ gamesRouter.post('/:id/turn', async (c) => {
         `INSERT INTO game_messages (game_id, player_id, message, is_system) VALUES (?, ?, ?, 1)`
       ).bind(gameId, pid, `🎵 Jazz Singer passive income: +$${income.toLocaleString()} (${parts})`).run()
     }))
+
+    // Snitch stipend: $100 per sighting queued this season; clear pending_sightings
+    const { results: snitchRows } = await c.env.PROHIBITIONDB.prepare(
+      `SELECT id, pending_sightings FROM game_players WHERE game_id = ? AND role = 'snitch' AND pending_sightings IS NOT NULL`
+    ).bind(gameId).all<{ id: number; pending_sightings: string }>()
+    for (const snitch of snitchRows) {
+      const sightings = JSON.parse(snitch.pending_sightings) as Array<unknown>
+      if (sightings.length === 0) continue
+      const stipend = sightings.length * 100
+      await c.env.PROHIBITIONDB.prepare(
+        `UPDATE game_players SET cash = cash + ?, pending_sightings = NULL WHERE id = ?`
+      ).bind(stipend, snitch.id).run()
+      await c.env.PROHIBITIONDB.prepare(
+        `INSERT INTO ledger_entries (game_id, player_id, season, type, amount, description, city_id) VALUES (?, ?, ?, 'snitch_stipend', ?, ?, NULL)`
+      ).bind(gameId, snitch.id, playerRow.current_season, stipend, `Fed stipend — ${sightings.length} sighting${sightings.length !== 1 ? 's' : ''}`).run()
+    }
   }
 
   // End game after the final season
@@ -1790,7 +1849,7 @@ gamesRouter.get('/:id/state', async (c) => {
     `SELECT gp.id, gp.turn_order, gp.character_class, gp.cash, gp.heat,
             gp.jail_until_season, gp.current_city_id, gp.home_city_id, gp.adjustment_cards,
             gp.pending_drinks, gp.pending_trap, gp.stuck_until_season, gp.tutorial_seen,
-            gp.total_cash_earned, gp.consecutive_clean_seasons, gp.role
+            gp.total_cash_earned, gp.consecutive_clean_seasons, gp.role, gp.pending_sightings
      FROM game_players gp
      WHERE gp.game_id = ? AND gp.user_id = ?`
   ).bind(gameId, userId).first<{
@@ -1799,7 +1858,7 @@ gamesRouter.get('/:id/state', async (c) => {
     current_city_id: number | null; home_city_id: number | null; adjustment_cards: number;
     pending_drinks: string | null; pending_trap: string | null; stuck_until_season: number | null
     tutorial_seen: number; total_cash_earned: number; consecutive_clean_seasons: number
-    role: string
+    role: string; pending_sightings: string | null
   }>()
   if (!player) return c.json({ success: false, message: 'Not in game' }, 403)
 
@@ -1898,7 +1957,7 @@ gamesRouter.get('/:id/state', async (c) => {
       : Promise.resolve(null)
   ])
 
-  const [{ results: missionRows }, completedMissionsRow] = await Promise.all([
+  const [{ results: missionRows }, completedMissionsRow, { results: informantRows }] = await Promise.all([
     c.env.PROHIBITIONDB.prepare(
       `SELECT id, card_id, status, progress, assigned_season
        FROM player_missions WHERE player_id = ? AND status = 'held' ORDER BY assigned_season`
@@ -1906,6 +1965,15 @@ gamesRouter.get('/:id/state', async (c) => {
     c.env.PROHIBITIONDB.prepare(
       `SELECT COUNT(*) AS count FROM player_missions WHERE player_id = ? AND status = 'completed'`
     ).bind(player.id).first<{ count: number }>(),
+    player.role === 'snitch'
+      ? c.env.PROHIBITIONDB.prepare(
+          `SELECT i.id, i.city_id, cp.name AS city_name
+           FROM informants i
+           LEFT JOIN game_cities gc ON i.city_id = gc.id
+           LEFT JOIN city_pool cp ON gc.city_pool_id = cp.id
+           WHERE i.snitch_id = ? AND i.game_id = ?`
+        ).bind(player.id, gameId).all<{ id: number; city_id: number | null; city_name: string | null }>()
+      : Promise.resolve({ results: [] as Array<{ id: number; city_id: number | null; city_name: string | null }> }),
   ])
 
   return c.json({
@@ -1978,6 +2046,10 @@ gamesRouter.get('/:id/state', async (c) => {
         })),
         completedMissions: completedMissionsRow?.count ?? 0,
         role: player.role ?? 'bootlegger',
+        informants: informantRows.map(i => ({ id: i.id, cityId: i.city_id ?? null, cityName: i.city_name ?? null })),
+        pendingSightings: player.pending_sightings
+          ? JSON.parse(player.pending_sightings) as Array<{ playerName: string; cityId: number; cityName: string; season: number }>
+          : [],
       },
       players: [...players]
         .sort((a, b) => {
