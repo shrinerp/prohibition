@@ -107,17 +107,102 @@ export async function runNpcTurn(
   season: number
 ): Promise<void> {
   const npcRow = await db.prepare(
-    `SELECT cash, character_class, display_name, current_city_id, jail_until_season
+    `SELECT cash, character_class, display_name, current_city_id, jail_until_season,
+            role, jailed_count
      FROM game_players WHERE id = ?`
   ).bind(npcId).first<{
     cash: number; character_class: string; display_name: string | null
     current_city_id: number | null; jail_until_season: number | null
+    role: string; jailed_count: number
   }>()
   if (!npcRow) return
 
   const archetype = npcRow.character_class as NpcArchetype
   const displayName = npcRow.display_name ?? 'An operator'
   const isInJail = npcRow.jail_until_season != null && season <= npcRow.jail_until_season
+
+  // ── NPC snitch auto-recruitment ──────────────────────────────────────────
+  // Threshold: last place by cash AND cash < $300 AND jailed_count > 0
+  if ((npcRow.role ?? 'bootlegger') === 'bootlegger') {
+    const wealthRank = await db.prepare(
+      `SELECT id FROM game_players WHERE game_id = ? AND is_npc = 1 ORDER BY cash DESC`
+    ).bind(gameId).all<{ id: number }>()
+    const isLastNpc = wealthRank.results[wealthRank.results.length - 1]?.id === npcId
+    if (isLastNpc && npcRow.cash < 300 && npcRow.jailed_count > 0) {
+      await db.prepare(`UPDATE game_players SET role = 'snitch' WHERE id = ?`).bind(npcId).run()
+      await db.batch([
+        db.prepare(`INSERT INTO informants (game_id, snitch_id) VALUES (?, ?)`).bind(gameId, npcId),
+        db.prepare(`INSERT INTO informants (game_id, snitch_id) VALUES (?, ?)`).bind(gameId, npcId),
+        db.prepare(`INSERT INTO informants (game_id, snitch_id) VALUES (?, ?)`).bind(gameId, npcId),
+        db.prepare(`INSERT INTO informants (game_id, snitch_id) VALUES (?, ?)`).bind(gameId, npcId),
+      ])
+      // Place informants in the largest nearby cities
+      const { results: topCities } = await db.prepare(
+        `SELECT gc.id FROM game_cities gc JOIN city_pool cp ON gc.city_pool_id = cp.id
+         WHERE gc.game_id = ? AND cp.population_tier IN ('large', 'major')
+         ORDER BY cp.bribe_cost_multiplier DESC LIMIT 4`
+      ).bind(gameId).all<{ id: number }>()
+      const { results: npcInformants } = await db.prepare(
+        `SELECT id FROM informants WHERE snitch_id = ? AND game_id = ?`
+      ).bind(npcId, gameId).all<{ id: number }>()
+      await db.batch(npcInformants.slice(0, topCities.length).map((inf, i) =>
+        db.prepare(`UPDATE informants SET city_id = ?, placed_at = ? WHERE id = ?`)
+          .bind(topCities[i].id, season, inf.id)
+      ))
+      return // snitch turn logic runs next turn
+    }
+  }
+
+  // ── NPC snitch turn: file accusations if sightings match ─────────────────
+  if ((npcRow.role ?? 'bootlegger') === 'snitch') {
+    const sightingsRaw = await db.prepare(
+      `SELECT pending_sightings FROM game_players WHERE id = ?`
+    ).bind(npcId).first<{ pending_sightings: string | null }>()
+    const sightings = sightingsRaw?.pending_sightings
+      ? JSON.parse(sightingsRaw.pending_sightings) as Array<{ playerName: string; cityId: number; season: number }>
+      : []
+
+    if (sightings.length >= 2) {
+      // Find a human player whose all vehicles appear in sightings
+      const { results: humanPlayers } = await db.prepare(
+        `SELECT id FROM game_players WHERE game_id = ? AND is_npc = 0 AND role = 'bootlegger'`
+      ).bind(gameId).all<{ id: number }>()
+      for (const target of humanPlayers) {
+        const { results: targetVehicles } = await db.prepare(
+          `SELECT id, city_id FROM vehicles WHERE player_id = ?`
+        ).bind(target.id).all<{ id: number; city_id: number }>()
+        const allPinned = targetVehicles.every(v =>
+          sightings.some(s => s.cityId === v.city_id)
+        )
+        if (allPinned && targetVehicles.length > 0) {
+          const alreadyAccused = await db.prepare(
+            `SELECT id FROM snitch_accusations WHERE game_id = ? AND snitch_id = ? AND target_id = ? AND season = ?`
+          ).bind(gameId, npcId, target.id, season).first()
+          if (!alreadyAccused) {
+            const cargoRows = await db.prepare(
+              `SELECT COALESCE(SUM(vi.quantity), 0) AS total FROM vehicle_inventory vi JOIN vehicles v ON vi.vehicle_id = v.id WHERE v.player_id = ?`
+            ).bind(target.id).first<{ total: number }>()
+            const jailTime = Math.min(8, Math.max(1, 1 + Math.floor((cargoRows?.total ?? 0) / 4)))
+            const targetNameRow = await db.prepare(
+              `SELECT COALESCE(display_name, 'Someone') AS name FROM game_players WHERE id = ?`
+            ).bind(target.id).first<{ name: string }>()
+            const targetName = (targetNameRow?.name ?? 'Someone').replace(/@.*$/, '')
+            await db.prepare(
+              `INSERT INTO snitch_accusations (game_id, snitch_id, target_id, season, success) VALUES (?, ?, ?, ?, 1)`
+            ).bind(gameId, npcId, target.id, season).run()
+            await db.prepare(
+              `UPDATE game_players SET jail_until_season = ?, jailed_count = jailed_count + 1 WHERE id = ?`
+            ).bind(season + jailTime, target.id).run()
+            await db.prepare(
+              `INSERT INTO game_messages (game_id, player_id, message, is_system) VALUES (?, NULL, ?, 1)`
+            ).bind(gameId, `🕵️ An accusation was brought against ${targetName}. ${targetName} has been sent to jail by the feds.`).run()
+          }
+          break
+        }
+      }
+    }
+    return // snitch doesn't do normal bootlegger turn
+  }
 
   // Step 1: Sell distillery stock (always)
   await sellAllDistilleryStock(db, gameId, npcId, season, displayName)
