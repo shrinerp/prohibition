@@ -1561,22 +1561,23 @@ gamesRouter.post('/:id/turn', async (c) => {
     // action.targetPlayerId: number, action.claimedLocations: Array<{ vehicleId: number; cityId: number }>
     if (action.type === 'file_accusation' && playerRow.role === 'snitch' && action.cityId) {
       const targetId = action.cityId  // reuse cityId field as targetPlayerId
-      const claimedLocations = (action.targetPath ?? []) as unknown as Array<{ vehicleId: number; cityId: number }>
+      // targetPath is an array of cityIds the snitch claims target's vehicles are in
+      const claimedCityIds = (action.targetPath ?? []) as unknown as number[]
 
       // One accusation per target per season (not per turn — check recent)
       const alreadyAccused = await c.env.PROHIBITIONDB.prepare(
         `SELECT id FROM snitch_accusations WHERE game_id = ? AND snitch_id = ? AND target_id = ? AND season = ?`
       ).bind(gameId, playerRow.id, targetId, playerRow.current_season).first()
-      if (!alreadyAccused && claimedLocations.length > 0) {
+      if (!alreadyAccused && claimedCityIds.length > 0) {
         // Fetch target's actual vehicle positions
         const { results: targetVehicles } = await c.env.PROHIBITIONDB.prepare(
           `SELECT id, city_id FROM vehicles WHERE player_id = ?`
         ).bind(targetId).all<{ id: number; city_id: number }>()
 
-        const success = targetVehicles.length > 0 && targetVehicles.every(v => {
-          const claim = claimedLocations.find(cl => cl.vehicleId === v.id)
-          return claim && claim.cityId === v.city_id
-        }) && claimedLocations.length === targetVehicles.length
+        // Success: snitch correctly identified every city where target has a vehicle
+        const success = targetVehicles.length > 0 &&
+          claimedCityIds.length === targetVehicles.length &&
+          targetVehicles.every(v => claimedCityIds.includes(v.city_id))
 
         const targetNameRow = await c.env.PROHIBITIONDB.prepare(
           `SELECT COALESCE(display_name, 'Someone') AS name FROM game_players WHERE id = ?`
