@@ -8,7 +8,9 @@ import { generateRoads, buildGraph, getShortestPath } from '../game/mapEngine'
 import { DISTILLERY_TIERS, getUpgradeCost } from '../game/production'
 import {
   rollPoliceEncounter, resolveSubmit, resolveBribe, resolveRun,
-  calculateHeatIncrease, calculateSpotBribeCost, calculateLongTermBribeCost, type PopulationTier
+  calculateHeatIncrease, calculateSpotBribeCost, calculateLongTermBribeCost,
+  rollFedStop, calculateFedFineCost, calculateFedJailTime,
+  type PopulationTier
 } from '../game/police'
 import { applyBribeDuration, applyMovementModifier, applyCargoMultiplier, applyTakeoverCostModifier, applyProductionModifier, getCharacter } from '../game/characters'
 import { runNpcTurn } from '../game/npc'
@@ -499,6 +501,7 @@ gamesRouter.post('/:id/turn', async (c) => {
     `SELECT gp.id, gp.turn_order, gp.current_city_id, gp.character_class,
             gp.heat, gp.pending_police_encounter, gp.cash, gp.turn_started_at,
             gp.stuck_until_season, COALESCE(gp.display_name, u.email) AS display_name,
+            gp.role, gp.jailed_count, gp.federal_bribe_expires_season,
             g.current_player_index, g.current_season, g.total_seasons, g.status, g.player_count, g.max_players
      FROM game_players gp
      JOIN games g ON g.id = gp.game_id
@@ -509,6 +512,7 @@ gamesRouter.post('/:id/turn', async (c) => {
     character_class: string; heat: number; cash: number; turn_started_at: string | null
     pending_police_encounter: string | null
     stuck_until_season: number | null; display_name: string | null
+    role: string; jailed_count: number; federal_bribe_expires_season: number | null
     current_player_index: number; current_season: number; total_seasons: number; status: string; player_count: number; max_players: number
   }>()
 
@@ -548,7 +552,9 @@ gamesRouter.post('/:id/turn', async (c) => {
     alcoholType?: string; quantity?: number; vehicleId?: number; choice?: string; duration?: number
     vehicles?: Array<{ vehicleId: number; targetPath: number[]; allocatedPoints: number }>
   }
-  let policeEncounterResult: { vehicleId?: number; bribeCost: number; populationTier: string; heat: number } | null = null
+  type EncounterEntry = { vehicleId?: number; bribeCost: number; populationTier: string; heat: number; encounterType?: 'local' | 'fed'; fineCost?: number; jailSeasons?: number; cargoUnits?: number }
+  let policeEncounterResult: EncounterEntry | null = null
+  let fedEncounterResult: { fineCost: number; jailSeasons: number; cargoUnits: number } | null = null
   const celebrations: Array<{ type: string; cityId?: number; newTier?: number; vehicleId?: string; vehicleDbId?: number; vehicleType?: string; missionCardId?: number; reward?: number; repairCost?: number; units?: number; alcoholType?: string }> = []
   const boughtThisTurn = new Map<number, number>()
 
@@ -572,9 +578,7 @@ gamesRouter.post('/:id/turn', async (c) => {
 
     // ── Police resolve (must be first — clears pending and then ends turn) ────
     if (action.type === 'police_resolve' && playerRow.pending_police_encounter) {
-      const queue = JSON.parse(playerRow.pending_police_encounter) as Array<{
-        vehicleId?: number; bribeCost: number; populationTier: PopulationTier; heat: number
-      }>
+      const queue = JSON.parse(playerRow.pending_police_encounter) as EncounterEntry[]
       if (queue.length === 0) continue
       const encounter = queue.shift()!
       const choice = action.choice as 'submit' | 'bribe' | 'run'
@@ -641,7 +645,7 @@ gamesRouter.post('/:id/turn', async (c) => {
         } else {
           const jailUntil = playerRow.current_season + rr.jailSeasons
           await c.env.PROHIBITIONDB.prepare(
-            `UPDATE game_players SET heat = ?, jail_until_season = ?, pending_police_encounter = ? WHERE id = ?`
+            `UPDATE game_players SET heat = ?, jail_until_season = ?, jailed_count = jailed_count + 1, pending_police_encounter = ? WHERE id = ?`
           ).bind(newHeat, jailUntil, remaining2, playerRow.id).run()
           await updateCumulativeProgress(c.env.PROHIBITIONDB, playerRow.id, { type: 'jailed' })
         }
@@ -650,7 +654,76 @@ gamesRouter.post('/:id/turn', async (c) => {
       // If more encounters pending, return the next one
       if (queue.length > 0) {
         const next = queue[0]
-        policeEncounterResult = { vehicleId: next.vehicleId, bribeCost: next.bribeCost, populationTier: next.populationTier, heat: next.heat }
+        if (next.encounterType === 'fed') {
+          fedEncounterResult = { fineCost: next.fineCost!, jailSeasons: next.jailSeasons!, cargoUnits: next.cargoUnits! }
+        } else {
+          policeEncounterResult = next
+        }
+      }
+      // Fall through to turn advance
+    }
+
+    // ── Fed stop resolve ──────────────────────────────────────────────────────
+    if (action.type === 'fed_stop_respond' && playerRow.pending_police_encounter) {
+      const queue = JSON.parse(playerRow.pending_police_encounter) as EncounterEntry[]
+      if (queue.length === 0) continue
+      const encounter = queue.shift()!
+      if (encounter.encounterType !== 'fed') continue
+
+      const freshRow = await c.env.PROHIBITIONDB.prepare(
+        `SELECT cash, heat FROM game_players WHERE id = ?`
+      ).bind(playerRow.id).first<{ cash: number; heat: number }>()
+      const freshCash = freshRow?.cash ?? 0
+      const freshHeat = freshRow?.heat ?? 0
+      const remaining2 = queue.length > 0 ? JSON.stringify(queue) : null
+      const choice = action.choice as 'pay' | 'jail' | 'snitch'
+      const displayName = (playerRow.display_name ?? 'Someone').replace(/@.*$/, '')
+
+      if (choice === 'pay') {
+        const fine = Math.min(encounter.fineCost!, freshCash)
+        const newHeat = Math.max(0, freshHeat - 5)
+        await c.env.PROHIBITIONDB.prepare(
+          `UPDATE game_players SET cash = cash - ?, heat = ?, pending_police_encounter = ? WHERE id = ?`
+        ).bind(fine, newHeat, remaining2, playerRow.id).run()
+        addLedger('fed_fine', -fine, 'Paid federal fine', playerRow.current_city_id)
+        await c.env.PROHIBITIONDB.prepare(
+          `INSERT INTO game_messages (game_id, player_id, message, is_system) VALUES (?, ?, ?, 1)`
+        ).bind(gameId, playerRow.id, `🕵️ ${displayName} paid a federal fine.`).run()
+
+      } else if (choice === 'jail') {
+        const newHeat = Math.max(0, freshHeat - 10)
+        const jailUntil = playerRow.current_season + (encounter.jailSeasons ?? 1)
+        await c.env.PROHIBITIONDB.prepare(
+          `UPDATE game_players SET heat = ?, jail_until_season = ?, jailed_count = jailed_count + 1, pending_police_encounter = ? WHERE id = ?`
+        ).bind(newHeat, jailUntil, remaining2, playerRow.id).run()
+        await updateCumulativeProgress(c.env.PROHIBITIONDB, playerRow.id, { type: 'jailed' })
+        addLedger('fed_jail', 0, 'Taken in by federal agents', playerRow.current_city_id)
+        await c.env.PROHIBITIONDB.prepare(
+          `INSERT INTO game_messages (game_id, player_id, message, is_system) VALUES (?, ?, ?, 1)`
+        ).bind(gameId, playerRow.id, `🕵️ ${displayName} was taken in by federal agents.`).run()
+
+      } else if (choice === 'snitch') {
+        await c.env.PROHIBITIONDB.prepare(
+          `UPDATE game_players SET role = 'snitch', pending_police_encounter = ? WHERE id = ?`
+        ).bind(remaining2, playerRow.id).run()
+        // Create 4 unplaced informants
+        await c.env.PROHIBITIONDB.batch([
+          c.env.PROHIBITIONDB.prepare(`INSERT INTO informants (game_id, snitch_id) VALUES (?, ?)`).bind(gameId, playerRow.id),
+          c.env.PROHIBITIONDB.prepare(`INSERT INTO informants (game_id, snitch_id) VALUES (?, ?)`).bind(gameId, playerRow.id),
+          c.env.PROHIBITIONDB.prepare(`INSERT INTO informants (game_id, snitch_id) VALUES (?, ?)`).bind(gameId, playerRow.id),
+          c.env.PROHIBITIONDB.prepare(`INSERT INTO informants (game_id, snitch_id) VALUES (?, ?)`).bind(gameId, playerRow.id),
+        ])
+        // No public announcement — silent flip
+      }
+
+      playerRow.pending_police_encounter = remaining2
+      if (queue.length > 0) {
+        const next = queue[0]
+        if (next.encounterType === 'fed') {
+          fedEncounterResult = { fineCost: next.fineCost!, jailSeasons: next.jailSeasons!, cargoUnits: next.cargoUnits! }
+        } else {
+          policeEncounterResult = next
+        }
       }
       // Fall through to turn advance
     }
@@ -727,16 +800,52 @@ gamesRouter.post('/:id/turn', async (c) => {
           const bribeCost = calculateSpotBribeCost(currentHeat, tier)
           // Append to encounter queue
           const existing = playerRow.pending_police_encounter
-            ? JSON.parse(playerRow.pending_police_encounter) as Array<{ vehicleId: number; bribeCost: number; populationTier: string; heat: number }>
+            ? JSON.parse(playerRow.pending_police_encounter) as EncounterEntry[]
             : []
-          existing.push({ vehicleId: vehicleRow.id, bribeCost, populationTier: tier, heat: currentHeat })
+          existing.push({ vehicleId: vehicleRow.id, bribeCost, populationTier: tier, heat: currentHeat, encounterType: 'local' })
           const newJson = JSON.stringify(existing)
           await c.env.PROHIBITIONDB.prepare(
             `UPDATE game_players SET pending_police_encounter = ? WHERE id = ?`
           ).bind(newJson, playerRow.id).run()
           playerRow.pending_police_encounter = newJson
-          if (!policeEncounterResult) {
-            policeEncounterResult = { vehicleId: vehicleRow.id, bribeCost, populationTier: tier, heat: currentHeat }
+          if (!policeEncounterResult && !fedEncounterResult) {
+            policeEncounterResult = { vehicleId: vehicleRow.id, bribeCost, populationTier: tier, heat: currentHeat, encounterType: 'local' }
+          }
+        }
+
+        // Federal Stop roll — flat probability weighted by desperation, bypasses city bribe protection
+        {
+          const allPlayers = await c.env.PROHIBITIONDB.prepare(
+            `SELECT id, cash FROM game_players WHERE game_id = ? AND is_npc = 0 AND jail_until_season IS NULL ORDER BY cash DESC`
+          ).bind(gameId).all<{ id: number; cash: number }>()
+          const rankByWealth = (allPlayers.results.findIndex(p => p.id === playerRow.id) ?? 0) + 1
+          const playerCount = Math.max(1, allPlayers.results.length)
+          const cityCountRow = await c.env.PROHIBITIONDB.prepare(
+            `SELECT COUNT(*) AS cnt FROM game_cities WHERE game_id = ? AND owner_player_id = ?`
+          ).bind(gameId, playerRow.id).first<{ cnt: number }>()
+          const cityCount = cityCountRow?.cnt ?? 0
+          const fedBribeActive = playerRow.federal_bribe_expires_season != null &&
+            playerRow.federal_bribe_expires_season > playerRow.current_season
+
+          if (rollFedStop({
+            cityCount, cash: currentCash, jailedCount: playerRow.jailed_count,
+            rankByWealth, playerCount, federalBribeActive: fedBribeActive, cityBribed: cityIsBribed
+          })) {
+            const cargoUnits = vinv.reduce((s, r) => s + r.quantity, 0)
+            const fineCost = calculateFedFineCost(currentCash)
+            const jailSeasons = calculateFedJailTime(cargoUnits)
+            const fedQueue = playerRow.pending_police_encounter
+              ? JSON.parse(playerRow.pending_police_encounter) as EncounterEntry[]
+              : []
+            fedQueue.push({ bribeCost: 0, populationTier: 'small', heat: currentHeat, encounterType: 'fed', fineCost, jailSeasons, cargoUnits })
+            const fedJson = JSON.stringify(fedQueue)
+            await c.env.PROHIBITIONDB.prepare(
+              `UPDATE game_players SET pending_police_encounter = ? WHERE id = ?`
+            ).bind(fedJson, playerRow.id).run()
+            playerRow.pending_police_encounter = fedJson
+            if (!policeEncounterResult && !fedEncounterResult) {
+              fedEncounterResult = { fineCost, jailSeasons, cargoUnits }
+            }
           }
         }
       }
@@ -1349,7 +1458,11 @@ gamesRouter.post('/:id/turn', async (c) => {
     }
   }
 
-  // If a police encounter was triggered this turn, hold the turn until the player resolves it
+  // If an encounter was triggered this turn, hold the turn until the player resolves it
+  if (fedEncounterResult) {
+    await flushLedger()
+    return c.json({ success: true, fedEncounter: fedEncounterResult } as object)
+  }
   if (policeEncounterResult) {
     await flushLedger()
     return c.json({ success: true, policeEncounter: policeEncounterResult } as object)
@@ -1357,7 +1470,7 @@ gamesRouter.post('/:id/turn', async (c) => {
 
   // Market/free actions (buy, sell, pickup, sell_city_stock, upgrade_*, claim_city, bribe_official)
   // do NOT end the turn — only move, stay, skip are terminal
-  const TERMINAL_ACTIONS = new Set(['move', 'stay', 'skip', 'police_resolve'])
+  const TERMINAL_ACTIONS = new Set(['move', 'stay', 'skip', 'police_resolve', 'fed_stop_respond'])
   const hasTerminal = (actions as Action[]).some(a => TERMINAL_ACTIONS.has(a.type))
   if (!hasTerminal) {
     await flushLedger()
@@ -1677,7 +1790,7 @@ gamesRouter.get('/:id/state', async (c) => {
     `SELECT gp.id, gp.turn_order, gp.character_class, gp.cash, gp.heat,
             gp.jail_until_season, gp.current_city_id, gp.home_city_id, gp.adjustment_cards,
             gp.pending_drinks, gp.pending_trap, gp.stuck_until_season, gp.tutorial_seen,
-            gp.total_cash_earned, gp.consecutive_clean_seasons
+            gp.total_cash_earned, gp.consecutive_clean_seasons, gp.role
      FROM game_players gp
      WHERE gp.game_id = ? AND gp.user_id = ?`
   ).bind(gameId, userId).first<{
@@ -1686,18 +1799,19 @@ gamesRouter.get('/:id/state', async (c) => {
     current_city_id: number | null; home_city_id: number | null; adjustment_cards: number;
     pending_drinks: string | null; pending_trap: string | null; stuck_until_season: number | null
     tutorial_seen: number; total_cash_earned: number; consecutive_clean_seasons: number
+    role: string
   }>()
   if (!player) return c.json({ success: false, message: 'Not in game' }, 403)
 
   const { results: players } = await c.env.PROHIBITIONDB.prepare(
     `SELECT gp.id, gp.turn_order, gp.character_class, gp.is_npc, gp.current_city_id, gp.cash,
-            gp.display_name, gp.turn_started_at, u.email
+            gp.display_name, gp.turn_started_at, gp.role, u.email
      FROM game_players gp LEFT JOIN users u ON gp.user_id = u.id
      WHERE gp.game_id = ? ORDER BY gp.turn_order`
   ).bind(gameId).all<{
     id: number; turn_order: number; character_class: string; is_npc: number;
     current_city_id: number | null; cash: number; display_name: string | null
-    turn_started_at: string | null; email: string | null
+    turn_started_at: string | null; email: string | null; role: string
   }>()
 
   const { results: vehicleRows } = await c.env.PROHIBITIONDB.prepare(
@@ -1863,16 +1977,26 @@ gamesRouter.get('/:id/state', async (c) => {
           assignedSeason: m.assigned_season,
         })),
         completedMissions: completedMissionsRow?.count ?? 0,
+        role: player.role ?? 'bootlegger',
       },
-      players: players.map(p => ({
-        id:            p.id,
-        turnOrder:     p.turn_order,
-        characterClass: p.character_class,
-        isNpc:         p.is_npc === 1,
-        currentCityId: p.current_city_id,
-        turnStartedAt: p.turn_started_at ?? null,
-        name:          p.display_name ?? (p.is_npc ? `NPC ${p.turn_order + 1}` : (p.email?.split('@')[0] ?? 'Player'))
-      })),
+      players: [...players]
+        .sort((a, b) => {
+          // Snitches always rank last on the scoreboard
+          const aSnitch = (a.role ?? 'bootlegger') === 'snitch' ? 1 : 0
+          const bSnitch = (b.role ?? 'bootlegger') === 'snitch' ? 1 : 0
+          if (aSnitch !== bSnitch) return aSnitch - bSnitch
+          return b.cash - a.cash
+        })
+        .map(p => ({
+          id:            p.id,
+          turnOrder:     p.turn_order,
+          characterClass: p.character_class,
+          isNpc:         p.is_npc === 1,
+          currentCityId: p.current_city_id,
+          turnStartedAt: p.turn_started_at ?? null,
+          role:          p.role ?? 'bootlegger',
+          name:          p.display_name ?? (p.is_npc ? `NPC ${p.turn_order + 1}` : (p.email?.split('@')[0] ?? 'Player'))
+        })),
       vehiclePrices: VEHICLE_PRICES,
       alliances: allianceRows.map(a => ({
         id:            a.id,

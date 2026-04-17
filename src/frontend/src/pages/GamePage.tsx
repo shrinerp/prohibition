@@ -7,6 +7,7 @@ import MarketDialog   from '../components/MarketDialog'
 import VehicleDialog  from '../components/VehicleDialog'
 import StillDialog    from '../components/StillDialog'
 import PoliceDialog   from '../components/PoliceDialog'
+import FedStopDialog  from '../components/FedStopDialog'
 import BribeDialog      from '../components/BribeDialog'
 import SeasonTimeline   from '../components/SeasonTimeline'
 import JailOverlay      from '../components/JailOverlay'
@@ -342,6 +343,7 @@ export default function GamePage() {
   const [trapOpen,     setTrapOpen]     = useState(false)
   const [viewCityId,   setViewCityId]   = useState<number | null>(null)
   const [policeEncounter, setPoliceEncounter] = useState<{ bribeCost: number; populationTier: string; heat: number } | null>(null)
+  const [fedEncounter, setFedEncounter] = useState<{ fineCost: number; jailSeasons: number; cargoUnits: number } | null>(null)
   const [leftOpen,  setLeftOpen]  = useState(true)
   const [rightOpen, setRightOpen] = useState(true)
   const [inviteEmail, setInviteEmail] = useState('')
@@ -935,6 +937,9 @@ export default function GamePage() {
         throw new Error(`Turn failed (${res.status}): ${text}`)
       }
       const data = await res.json()
+      if (data.fedEncounter) {
+        setFedEncounter(data.fedEncounter)
+      }
       if (data.policeEncounter) {
         setPoliceEncounter(data.policeEncounter)
       }
@@ -1724,6 +1729,19 @@ export default function GamePage() {
               setCelebrationQueue(prev => prev.slice(1))
               await fetchAll()
             }}
+          />
+        )}
+
+        {/* Federal stop dialog */}
+        {fedEncounter && (
+          <FedStopDialog
+            fineCost={fedEncounter.fineCost}
+            jailSeasons={fedEncounter.jailSeasons}
+            cargoUnits={fedEncounter.cargoUnits}
+            cash={player?.cash ?? 0}
+            onPay={() => { submitTurn([{ type: 'fed_stop_respond', choice: 'pay' }], { transition: true }); setFedEncounter(null) }}
+            onJail={() => { submitTurn([{ type: 'fed_stop_respond', choice: 'jail' }], { transition: true }); setFedEncounter(null) }}
+            onSnitch={() => { submitTurn([{ type: 'fed_stop_respond', choice: 'snitch' }], { transition: true }); setFedEncounter(null) }}
           />
         )}
 
