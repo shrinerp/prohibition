@@ -49,7 +49,7 @@ export const HEAT_CHANGES = {
 export const TIER_PASSIVE_HEAT: Record<number, number> = { 1: 0, 2: 1, 3: 1, 4: 2, 5: 4 }
 
 /** Bribe multiplier by city size */
-const TIER_BRIBE_MULTIPLIER: Record<PopulationTier, number> = {
+export const TIER_BRIBE_MULTIPLIER: Record<PopulationTier, number> = {
   small:  1.0,
   medium: 1.5,
   large:  2.5,
@@ -143,4 +143,42 @@ export function calculateSpotBribeCost(currentHeat: number, tier: PopulationTier
 export function calculateLongTermBribeCost(tier: PopulationTier): number {
   const base = 500
   return Math.floor(base * TIER_BRIBE_MULTIPLIER[tier])
+}
+
+// ── Federal Stop ─────────────────────────────────────────────────────────────
+
+export interface FedStopContext {
+  cityCount: number
+  cash: number
+  jailedCount: number
+  rankByWealth: number   // 1 = first place, N = last place
+  playerCount: number
+  federalBribeActive: boolean
+  cityBribed: boolean
+}
+
+/**
+ * Weighted probability roll for a Federal Stop.
+ * Base 3%; modifiers for desperation factors; floor 0.5%.
+ * Feds are NOT heat-based — they target struggling players more heavily.
+ */
+export function rollFedStop(ctx: FedStopContext): boolean {
+  let weight = 0.03
+  if (ctx.cityCount === 0)                      weight += 0.03  // lost home city
+  if (ctx.cash < 500)                           weight += 0.03  // desperate
+  if (ctx.jailedCount > 0)                      weight += 0.02  // prior record
+  if (ctx.rankByWealth === ctx.playerCount)     weight += 0.03  // last place
+  if (ctx.federalBribeActive)                   weight -= 0.015 // ongoing fed bribe
+  if (ctx.cityBribed)                           weight -= 0.01  // active city bribe
+  return Math.random() < Math.max(0.005, weight)
+}
+
+/** Fine cost: 25% of cash, minimum $150. */
+export function calculateFedFineCost(cash: number): number {
+  return Math.max(150, Math.floor(cash * 0.25))
+}
+
+/** Jail seasons for a fed stop: 1 minimum, +1 per 4 cargo units, max 8. */
+export function calculateFedJailTime(cargoUnits: number): number {
+  return Math.min(8, Math.max(1, 1 + Math.floor(cargoUnits / 4)))
 }
