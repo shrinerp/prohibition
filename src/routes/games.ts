@@ -1452,6 +1452,73 @@ gamesRouter.post('/:id/turn', async (c) => {
         `UPDATE informants SET city_id = NULL, placed_at = NULL WHERE id = ? AND snitch_id = ? AND game_id = ?`
       ).bind(action.quantity /* informantId */, playerRow.id, gameId).run()
     }
+
+    // ── File accusation (snitch only, free action) ────────────────────────────
+    // action.targetPlayerId: number, action.claimedLocations: Array<{ vehicleId: number; cityId: number }>
+    if (action.type === 'file_accusation' && playerRow.role === 'snitch' && action.cityId) {
+      const targetId = action.cityId  // reuse cityId field as targetPlayerId
+      const claimedLocations = (action.targetPath ?? []) as unknown as Array<{ vehicleId: number; cityId: number }>
+
+      // One accusation per target per season (not per turn — check recent)
+      const alreadyAccused = await c.env.PROHIBITIONDB.prepare(
+        `SELECT id FROM snitch_accusations WHERE game_id = ? AND snitch_id = ? AND target_id = ? AND season = ?`
+      ).bind(gameId, playerRow.id, targetId, playerRow.current_season).first()
+      if (!alreadyAccused && claimedLocations.length > 0) {
+        // Fetch target's actual vehicle positions
+        const { results: targetVehicles } = await c.env.PROHIBITIONDB.prepare(
+          `SELECT id, city_id FROM vehicles WHERE player_id = ?`
+        ).bind(targetId).all<{ id: number; city_id: number }>()
+
+        const success = targetVehicles.length > 0 && targetVehicles.every(v => {
+          const claim = claimedLocations.find(cl => cl.vehicleId === v.id)
+          return claim && claim.cityId === v.city_id
+        }) && claimedLocations.length === targetVehicles.length
+
+        const targetNameRow = await c.env.PROHIBITIONDB.prepare(
+          `SELECT COALESCE(display_name, 'Someone') AS name FROM game_players WHERE id = ?`
+        ).bind(targetId).first<{ name: string }>()
+        const targetName = (targetNameRow?.name ?? 'Someone').replace(/@.*$/, '')
+
+        await c.env.PROHIBITIONDB.prepare(
+          `INSERT INTO snitch_accusations (game_id, snitch_id, target_id, season, success) VALUES (?, ?, ?, ?, ?)`
+        ).bind(gameId, playerRow.id, targetId, playerRow.current_season, success ? 1 : 0).run()
+
+        if (success) {
+          // Jail the target
+          const { results: targetCargoRows } = await c.env.PROHIBITIONDB.prepare(
+            `SELECT COALESCE(SUM(vi.quantity), 0) AS total FROM vehicle_inventory vi JOIN vehicles v ON vi.vehicle_id = v.id WHERE v.player_id = ?`
+          ).bind(targetId).all<{ total: number }>()
+          const targetCargo = targetCargoRows[0]?.total ?? 0
+          const jailTime = calculateFedJailTime(targetCargo)
+          await c.env.PROHIBITIONDB.prepare(
+            `UPDATE game_players SET jail_until_season = ?, jailed_count = jailed_count + 1 WHERE id = ?`
+          ).bind(playerRow.current_season + jailTime, targetId).run()
+          await c.env.PROHIBITIONDB.prepare(
+            `INSERT INTO game_messages (game_id, player_id, message, is_system) VALUES (?, NULL, ?, 1)`
+          ).bind(gameId, `🕵️ An accusation was brought against ${targetName}. ${targetName} has been sent to jail by the feds.`).run()
+
+          // Feds-win check: was target rank 1?
+          const { results: wealthRank } = await c.env.PROHIBITIONDB.prepare(
+            `SELECT id FROM game_players WHERE game_id = ? AND role = 'bootlegger' ORDER BY cash DESC`
+          ).bind(gameId).all<{ id: number }>()
+          const isLeader = wealthRank[0]?.id === targetId || wealthRank.length === 0
+          if (isLeader) {
+            // All non-snitch players are jailed or eliminated — feds win
+            await c.env.PROHIBITIONDB.prepare(
+              `UPDATE games SET status = 'ended' WHERE id = ?`
+            ).bind(gameId).run()
+          }
+        } else {
+          // Burn next stipend
+          await c.env.PROHIBITIONDB.prepare(
+            `UPDATE game_players SET pending_sightings = '[]' WHERE id = ?`
+          ).bind(playerRow.id).run()
+          await c.env.PROHIBITIONDB.prepare(
+            `INSERT INTO game_messages (game_id, player_id, message, is_system) VALUES (?, NULL, ?, 1)`
+          ).bind(gameId, `🕵️ A failed accusation was brought against ${targetName}.`).run()
+        }
+      }
+    }
   }
 
   // ── Check mission completion (after all actions, before turn advance) ──────
@@ -1754,6 +1821,21 @@ gamesRouter.post('/:id/turn', async (c) => {
         `UPDATE games SET status = 'ended' WHERE id = ?`
       ).bind(gameId).run()
       recordLeaderboardEntries(c.env.PROHIBITIONDB, gameId, playerRow.total_seasons, playerRow.current_season).catch(() => {})
+    }
+  }
+
+  // All-snitches check: if every active (non-jailed) player is now a snitch, feds win
+  {
+    const activePlayers = await c.env.PROHIBITIONDB.prepare(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN role = 'snitch' THEN 1 ELSE 0 END) AS snitches
+       FROM game_players WHERE game_id = ? AND is_npc = 0`
+    ).bind(gameId).first<{ total: number; snitches: number }>()
+    if (activePlayers && activePlayers.total > 0 && activePlayers.snitches >= activePlayers.total) {
+      await c.env.PROHIBITIONDB.prepare(`UPDATE games SET status = 'ended' WHERE id = ?`).bind(gameId).run()
+      await c.env.PROHIBITIONDB.prepare(
+        `INSERT INTO game_messages (game_id, player_id, message, is_system) VALUES (?, NULL, ?, 1)`
+      ).bind(gameId, `🕵️ All players have been recruited by the feds. The feds win. Everyone loses.`).run()
     }
   }
 
