@@ -14,7 +14,7 @@ import {
 
 describe('CHARACTER_CLASSES registry', () => {
   it('has exactly 10 character classes', () => {
-    expect(Object.keys(CHARACTER_CLASSES).length).toBe(10)
+    expect(Object.keys(CHARACTER_CLASSES).length).toBe(14)
   })
 
   it('every class has id, name, perk, drawback, and modifiers', () => {

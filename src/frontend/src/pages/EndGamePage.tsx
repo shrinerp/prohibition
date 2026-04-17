@@ -1,6 +1,11 @@
 import React, { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 
+interface TimingPlayer {
+  playerId: number; name: string
+  avgSeconds: number; maxSeconds: number; totalSeconds: number; turnCount: number
+}
+
 interface PlayerNetWorth {
   playerId: number
   isYou: boolean
@@ -49,6 +54,14 @@ const SEASON_NAME_SETS: Record<number, string[]> = {
   4: ['Spring', 'Summer', 'Autumn', 'Winter'],
 }
 
+function fmtDuration(seconds: number): string {
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  if (h > 0) return `${h}h ${m}m`
+  if (m > 0) return `${m}m`
+  return `${seconds}s`
+}
+
 function getSeasonLabel(season: number, totalSeasons = 52): string {
   const seasonsPerYear = totalSeasons / 13
   const yearOffset  = Math.floor((season - 1) / seasonsPerYear)
@@ -65,6 +78,8 @@ export default function EndGamePage() {
   const [totalSeasons, setTotalSeasons] = useState(52)
   const [loading, setLoading] = useState(true)
   const [fetchError, setFetchError] = useState<string | null>(null)
+  const [timing, setTiming] = useState<TimingPlayer[]>([])
+  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     if (!gameId) return
@@ -78,6 +93,12 @@ export default function EndGamePage() {
         }
       })
       .catch(err => setFetchError(`Failed to load results: ${err}`))
+    const timingFetch = fetch(`/api/games/${gameId}/timing`)
+      .then(r => r.json())
+      .then((t: { success: boolean; players?: TimingPlayer[] }) => {
+        if (t.success && t.players?.length) setTiming(t.players)
+      })
+      .catch(() => { /* timing optional */ })
     const rcFetch = fetch(`/api/games/${gameId}/recap`)
       .then(r => r.json())
       .then((rc: { success: boolean; data?: { recap: string } }) => {
@@ -90,12 +111,31 @@ export default function EndGamePage() {
         if (s.success && s.game?.totalSeasons) setTotalSeasons(s.game.totalSeasons)
       })
       .catch(() => { /* fall back to 52 */ })
-    Promise.all([nwFetch, rcFetch, stateFetch]).finally(() => setLoading(false))
+    Promise.all([nwFetch, rcFetch, stateFetch, timingFetch]).finally(() => setLoading(false))
   }, [gameId])
 
   const me = players.find(p => p.isYou)
   const myRank = me ? players.indexOf(me) + 1 : null
   const maxTotal = players[0]?.total ?? 1
+
+  async function handleShare() {
+    const url = `${window.location.origin}/results/${gameId}`
+    const winner = players[0]
+    const shareData = {
+      title: 'Prohibitioner Results',
+      text: winner
+        ? `${winner.name} just won Prohibition with $${winner.total.toLocaleString()}! Check the final standings.`
+        : 'Check out these Prohibition results!',
+      url,
+    }
+    if (navigator.canShare?.(shareData)) {
+      try { await navigator.share(shareData) } catch { /* user cancelled */ }
+    } else {
+      await navigator.clipboard.writeText(url)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }
+  }
 
   if (loading) {
     return (
@@ -209,11 +249,67 @@ export default function EndGamePage() {
                       )}
                     </div>
                   )}
+
+                  {/* Total turn time */}
+                  {(() => {
+                    const t = timing.find(t => t.playerId === p.playerId)
+                    if (!t) return null
+                    return (
+                      <div className="mt-2 text-xs text-stone-500">
+                        ⏱ Total turn time: <span className="text-stone-400">{fmtDuration(t.totalSeconds)}</span>
+                        <span className="ml-2 text-stone-600">avg {fmtDuration(t.avgSeconds)}/turn</span>
+                      </div>
+                    )
+                  })()}
                 </div>
               )
             })}
           </div>
         </section>
+
+        {/* Turn Times */}
+        {timing.length > 0 && (
+          <section>
+            <h2 className="text-xs text-stone-500 uppercase tracking-widest mb-4">Turn Times</h2>
+            <div className="bg-stone-900 border border-stone-700 rounded-xl overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-stone-700">
+                    <th className="text-left px-4 py-2 text-stone-500 font-normal text-xs uppercase tracking-wide">Player</th>
+                    <th className="text-right px-4 py-2 text-stone-500 font-normal text-xs uppercase tracking-wide">Avg Turn</th>
+                    <th className="text-right px-4 py-2 text-stone-500 font-normal text-xs uppercase tracking-wide">Total</th>
+                    <th className="text-right px-4 py-2 text-stone-500 font-normal text-xs uppercase tracking-wide">Slowest</th>
+                    <th className="text-right px-4 py-2 text-stone-500 font-normal text-xs uppercase tracking-wide">Turns</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(() => {
+                    const maxTotal = Math.max(...timing.map(t => t.totalSeconds))
+                    return timing.map((t, i) => {
+                      const isSlowest = t.totalSeconds === maxTotal
+                      return (
+                        <tr key={t.playerId} className={`border-b border-stone-800 last:border-0 ${isSlowest ? 'bg-red-950/30' : ''}`}>
+                          <td className="px-4 py-2">
+                            {isSlowest && <span className="text-red-400 mr-1.5" title="Slowpoke">🐌</span>}
+                            <span className={isSlowest ? 'text-red-400 font-bold' : 'text-stone-300'}>{t.name}</span>
+                          </td>
+                          <td className={`px-4 py-2 text-right tabular-nums ${i === 0 ? 'text-red-400 font-bold' : 'text-stone-400'}`}>
+                            {fmtDuration(t.avgSeconds)}
+                          </td>
+                          <td className={`px-4 py-2 text-right tabular-nums ${isSlowest ? 'text-red-400 font-bold' : 'text-stone-500'}`}>
+                            {fmtDuration(t.totalSeconds)}
+                          </td>
+                          <td className="px-4 py-2 text-right tabular-nums text-stone-500">{fmtDuration(t.maxSeconds)}</td>
+                          <td className="px-4 py-2 text-right tabular-nums text-stone-500">{t.turnCount}</td>
+                        </tr>
+                      )
+                    })
+                  })()}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
 
         {/* Secret History */}
         {recap && (
@@ -236,10 +332,10 @@ export default function EndGamePage() {
             ← Back to Games
           </Link>
           <button
-            onClick={() => navigator.clipboard.writeText(`${window.location.origin}/results/${gameId}`)}
-            className="px-4 py-2 bg-stone-700 hover:bg-stone-600 text-stone-300 text-sm rounded transition"
+            onClick={handleShare}
+            className="px-4 py-2 bg-stone-700 hover:bg-stone-600 text-stone-300 text-sm rounded transition min-w-[140px]"
           >
-            Share Results →
+            {copied ? '✓ Copied!' : 'Share Results →'}
           </button>
         </div>
 

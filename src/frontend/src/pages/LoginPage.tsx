@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { useNavigate, useLocation, Link } from 'react-router-dom'
+import { identify, capture } from '../analytics'
 
 export default function LoginPage() {
   const nav = useNavigate()
@@ -19,8 +20,11 @@ export default function LoginPage() {
     })
     const data = await res.json()
     if (data.success) {
+      identify(email)
+      capture('login_success')
       nav(redirect)
     } else {
+      capture('login_failed', { reason: data.message })
       setError(data.message ?? 'Login failed')
     }
   }

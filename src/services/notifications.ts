@@ -1,6 +1,10 @@
 const GAME_START_YEAR = 1921
-const SEASONS_PER_YEAR = 4
-const SEASON_NAMES = ['Spring', 'Summer', 'Autumn', 'Winter'] as const
+const SEASON_NAME_SETS: Record<number, string[]> = {
+  1: [],
+  2: ['Spring', 'Autumn'],
+  3: ['Spring', 'Summer', 'Autumn'],
+  4: ['Spring', 'Summer', 'Autumn', 'Winter'],
+}
 
 export type NotificationEvent =
   | 'turn_start'
@@ -20,12 +24,15 @@ export interface NotificationPayload {
 
 /**
  * Convert a 1-indexed season number to a human-readable label.
- * Season 1 = Spring 1920, Season 52 = Winter 1933.
+ * totalSeasons determines the granularity: 52→4/year, 26→2/year, 13→1/year, etc.
  */
-export function getSeasonLabel(season: number): string {
-  const yearOffset  = Math.floor((season - 1) / SEASONS_PER_YEAR)
-  const seasonIndex = (season - 1) % SEASONS_PER_YEAR
-  return `${SEASON_NAMES[seasonIndex]} ${GAME_START_YEAR + yearOffset}`
+export function getSeasonLabel(season: number, totalSeasons = 52): string {
+  const seasonsPerYear = totalSeasons / 13
+  const yearOffset  = Math.floor((season - 1) / seasonsPerYear)
+  const seasonIndex = Math.round((season - 1) % seasonsPerYear)
+  const names = SEASON_NAME_SETS[seasonsPerYear] ?? []
+  const seasonName = names[seasonIndex] ? `${names[seasonIndex]} ` : ''
+  return `${seasonName}${GAME_START_YEAR + yearOffset}`
 }
 
 const SUBJECT_TEMPLATES: Record<NotificationEvent, (label: string) => string> = {

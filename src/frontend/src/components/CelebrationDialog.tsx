@@ -2,12 +2,17 @@ import React, { useEffect, useState } from 'react'
 import { getMissionCardDisplay } from '../data/missions'
 
 export interface Celebration {
-  type: 'claim_city' | 'upgrade_still' | 'upgrade_vehicle' | 'mission_complete'
+  type: 'claim_city' | 'upgrade_still' | 'upgrade_vehicle' | 'mission_complete' | 'vehicle_breakdown' | 'vehicle_warning' | 'steal_complete' | 'steal_blocked'
   cityId?: number
   newTier?: number
   vehicleId?: string
+  vehicleDbId?: number
+  vehicleType?: string
   missionCardId?: number
   reward?: number
+  repairCost?: number
+  units?: number
+  alcoholType?: string
 }
 
 const TIER_NAMES = ['', 'Basic Still', 'Copper Pot', 'Column Still', 'Industrial Press', 'Empire Distillery']
@@ -25,9 +30,11 @@ interface CelebrationDialogProps {
   celebration: Celebration
   cityName?: string
   onClose: () => void
+  onRepairVehicle?: (vehicleDbId: number, repairCost: number) => void
+  onAbandonVehicle?: (vehicleDbId: number) => void
 }
 
-export default function CelebrationDialog({ celebration, cityName, onClose }: CelebrationDialogProps) {
+export default function CelebrationDialog({ celebration, cityName, onClose, onRepairVehicle, onAbandonVehicle }: CelebrationDialogProps) {
   const [visible, setVisible] = useState(false)
 
   useEffect(() => {
@@ -79,6 +86,40 @@ export default function CelebrationDialog({ celebration, cityName, onClose }: Ce
     imageSrc = ''
     glowColor = 'rgba(168,85,247,0.4)'
     borderColor = 'border-purple-500'
+  } else if (celebration.type === 'vehicle_breakdown') {
+    const vName = VEHICLE_NAMES[celebration.vehicleType ?? ''] ?? celebration.vehicleType ?? 'Vehicle'
+    headline = 'Breakdown!'
+    subtext = cityName
+      ? `Your ${vName} in ${cityName} has been sitting idle too long and has broken down. Repair it for $${(celebration.repairCost ?? 0).toLocaleString()}, or abandon it — permanently.`
+      : `Your ${vName} has been sitting idle too long and has broken down. Repair it for $${(celebration.repairCost ?? 0).toLocaleString()}, or abandon it — permanently.`
+    imageSrc = `/vehicles/${celebration.vehicleType}.png`
+    glowColor = 'rgba(239,68,68,0.45)'
+    borderColor = 'border-red-500'
+  } else if (celebration.type === 'vehicle_warning') {
+    const vName = VEHICLE_NAMES[celebration.vehicleType ?? ''] ?? celebration.vehicleType ?? 'Vehicle'
+    headline = 'Warning: Car Rotting'
+    subtext = cityName
+      ? `Your ${vName} in ${cityName} has been parked for 4 seasons. Move it next turn or it will break down.`
+      : `Your ${vName} has been parked for 4 seasons. Move it next turn or it will break down.`
+    imageSrc = ''
+    glowColor = 'rgba(249,115,22,0.45)'
+    borderColor = 'border-orange-500'
+  } else if (celebration.type === 'steal_complete') {
+    headline = 'Heist!'
+    subtext = cityName
+      ? `Lifted ${celebration.units} unit${(celebration.units ?? 1) !== 1 ? 's' : ''} of ${celebration.alcoholType} from ${cityName}'s distillery.`
+      : `Lifted ${celebration.units} unit${(celebration.units ?? 1) !== 1 ? 's' : ''} of ${celebration.alcoholType}.`
+    imageSrc = ''
+    glowColor = 'rgba(20,184,166,0.45)'
+    borderColor = 'border-teal-500'
+  } else if (celebration.type === 'steal_blocked') {
+    headline = 'Blocked!'
+    subtext = cityName
+      ? `The owner parked their vehicle in ${cityName} — your crew couldn't get in.`
+      : `The owner's vehicle is parked at this distillery — steal blocked.`
+    imageSrc = ''
+    glowColor = 'rgba(239,68,68,0.45)'
+    borderColor = 'border-red-500'
   }
 
   return (
@@ -133,6 +174,21 @@ export default function CelebrationDialog({ celebration, cityName, onClose }: Ce
               <span className="text-8xl drop-shadow-2xl" style={{ filter: 'drop-shadow(0 0 20px rgba(168,85,247,0.8))' }}>🏆</span>
             </div>
           )}
+          {celebration.type === 'vehicle_warning' && (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <span className="text-8xl drop-shadow-2xl" style={{ filter: 'drop-shadow(0 0 20px rgba(249,115,22,0.8))' }}>⚠️</span>
+            </div>
+          )}
+          {celebration.type === 'steal_complete' && (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <span className="text-8xl drop-shadow-2xl" style={{ filter: 'drop-shadow(0 0 20px rgba(20,184,166,0.8))' }}>🥃</span>
+            </div>
+          )}
+          {celebration.type === 'steal_blocked' && (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <span className="text-8xl drop-shadow-2xl" style={{ filter: 'drop-shadow(0 0 20px rgba(239,68,68,0.8))' }}>🚫</span>
+            </div>
+          )}
           {/* Bottom gradient overlay */}
           <div className="absolute inset-0 bg-gradient-to-t from-stone-900/90 via-stone-900/20 to-transparent" />
 
@@ -156,20 +212,45 @@ export default function CelebrationDialog({ celebration, cityName, onClose }: Ce
 
         {/* Footer */}
         <div className="px-5 pb-5">
-          <button
-            onClick={handleClose}
-            className={`w-full py-2.5 font-black text-sm uppercase tracking-wider rounded-lg transition ${
-              celebration.type === 'upgrade_still'
-                ? 'bg-green-700 hover:bg-green-600 text-white shadow-[0_0_20px_rgba(34,197,94,0.4)]'
-                : celebration.type === 'upgrade_vehicle'
-                ? 'bg-blue-700 hover:bg-blue-600 text-white shadow-[0_0_20px_rgba(59,130,246,0.4)]'
-                : celebration.type === 'mission_complete'
-                ? 'bg-purple-700 hover:bg-purple-600 text-white shadow-[0_0_20px_rgba(168,85,247,0.4)]'
-                : 'bg-amber-600 hover:bg-amber-500 text-stone-900 shadow-[0_0_20px_rgba(217,119,6,0.5)]'
-            }`}
-          >
-            Continue
-          </button>
+          {celebration.type === 'vehicle_breakdown' && celebration.vehicleDbId != null ? (
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  setVisible(false)
+                  setTimeout(() => onRepairVehicle?.(celebration.vehicleDbId!, celebration.repairCost ?? 0), 250)
+                }}
+                className="flex-1 py-2.5 font-black text-sm uppercase tracking-wider rounded-lg transition bg-green-700 hover:bg-green-600 text-white shadow-[0_0_20px_rgba(34,197,94,0.4)]"
+              >
+                Repair ${(celebration.repairCost ?? 0).toLocaleString()}
+              </button>
+              <button
+                onClick={() => {
+                  setVisible(false)
+                  setTimeout(() => onAbandonVehicle?.(celebration.vehicleDbId!), 250)
+                }}
+                className="flex-1 py-2.5 font-black text-sm uppercase tracking-wider rounded-lg transition bg-red-800 hover:bg-red-700 text-white"
+              >
+                Abandon
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={handleClose}
+              className={`w-full py-2.5 font-black text-sm uppercase tracking-wider rounded-lg transition ${
+                celebration.type === 'upgrade_still'
+                  ? 'bg-green-700 hover:bg-green-600 text-white shadow-[0_0_20px_rgba(34,197,94,0.4)]'
+                  : celebration.type === 'upgrade_vehicle'
+                  ? 'bg-blue-700 hover:bg-blue-600 text-white shadow-[0_0_20px_rgba(59,130,246,0.4)]'
+                  : celebration.type === 'mission_complete'
+                  ? 'bg-purple-700 hover:bg-purple-600 text-white shadow-[0_0_20px_rgba(168,85,247,0.4)]'
+                  : celebration.type === 'vehicle_warning'
+                  ? 'bg-orange-700 hover:bg-orange-600 text-white shadow-[0_0_20px_rgba(249,115,22,0.4)]'
+                  : 'bg-amber-600 hover:bg-amber-500 text-stone-900 shadow-[0_0_20px_rgba(217,119,6,0.5)]'
+              }`}
+            >
+              Continue
+            </button>
+          )}
         </div>
       </div>
     </div>

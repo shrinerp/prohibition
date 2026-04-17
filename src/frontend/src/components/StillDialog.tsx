@@ -40,7 +40,7 @@ interface Distillery {
 
 interface StillDialogProps {
   distilleries: Distillery[]
-  currentCityId: number | null
+  vehicleCityIds: Set<number>
   characterClass: string
   cash: number
   onUpgrade: (cityId: number) => void
@@ -58,7 +58,7 @@ function TierBar({ tier }: { tier: number }) {
 }
 
 export default function StillDialog({
-  distilleries, currentCityId, characterClass, cash, onUpgrade, onClose
+  distilleries, vehicleCityIds, characterClass, cash, onUpgrade, onClose
 }: StillDialogProps) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -87,7 +87,7 @@ export default function StillDialog({
             const current   = TIERS[d.tier]
             const next      = TIERS[d.tier + 1]
             const cost      = next ? upgradeCost(d.tier + 1, characterClass) : 0
-            const isHere    = d.cityId === currentCityId
+            const isHere    = vehicleCityIds.has(d.cityId)
             const canAfford = cash >= cost
             const maxTier   = d.tier >= 5
 
@@ -146,7 +146,7 @@ export default function StillDialog({
                         onClick={() => { onUpgrade(d.cityId); onClose() }}
                         className="w-full mt-1 py-2 bg-amber-700 hover:bg-amber-600 disabled:opacity-40 text-amber-100 font-bold text-sm rounded uppercase tracking-wide transition"
                       >
-                        {!isHere ? 'Must be at this city' : `Upgrade — $${cost.toLocaleString()}`}
+                        {!isHere ? 'No car at this city' : `Upgrade — $${cost.toLocaleString()}`}
                       </button>
                     </div>
                   )}

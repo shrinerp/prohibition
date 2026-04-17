@@ -68,7 +68,7 @@ export default function MarketDialog({
       <div className="absolute inset-0 bg-black/70" onClick={() => onClose()} />
 
       {/* Dialog */}
-      <div className="relative bg-stone-900 border border-stone-600 rounded-lg shadow-2xl w-96 max-h-[80vh] flex flex-col">
+      <div data-tutorial="market_dialog" className="relative bg-stone-900 border border-stone-600 rounded-lg shadow-2xl w-96 max-h-[80vh] flex flex-col">
 
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-stone-700 flex-shrink-0">
@@ -89,7 +89,7 @@ export default function MarketDialog({
 
         {/* Your Still — free pick-up */}
         {distilleryStock.length > 0 && (
-          <div className="px-4 py-2 border-b border-stone-700 flex-shrink-0">
+          <div data-tutorial="still_inventory" className="px-4 py-2 border-b border-stone-700 flex-shrink-0">
             <div className="flex items-center justify-between mb-1">
               <p className="text-xs text-green-600 uppercase tracking-wider">⌂ Your still (free)</p>
               {distilleryStock.length > 1 && (
@@ -141,6 +141,7 @@ export default function MarketDialog({
           {(['buy', 'sell'] as const).map(t => (
             <button
               key={t}
+              data-tutorial={t === 'sell' ? 'market_sell_tab' : undefined}
               onClick={() => setTab(t)}
               className={`flex-1 py-2 text-sm font-bold uppercase tracking-wide transition ${
                 tab === t
@@ -158,7 +159,7 @@ export default function MarketDialog({
 
           {/* ── Buy tab ── */}
           {tab === 'buy' && (
-            <>
+            <div data-tutorial="market_buy">
               {purchaseBudgetExhausted && (
                 <p className="text-amber-500 text-xs bg-amber-950/40 border border-amber-800 rounded px-3 py-2">
                   Purchase limit reached — you've filled your vehicles' capacity for this turn.
@@ -205,7 +206,7 @@ export default function MarketDialog({
                   </tbody>
                 </table>
               )}
-            </>
+            </div>
           )}
 
           {/* ── Sell tab ── */}

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
+import { capture } from '../analytics'
 
 const ALCOHOL_EMOJI: Record<string, string> = {
   beer: '🍺', wine: '🍷', whiskey: '🥃', bourbon: '🥃', scotch: '🥃', rye: '🥃',
@@ -126,6 +127,7 @@ export default function ChatPanel({ gameId, myTurnOrder, players, playerColors, 
     const data = await res.json()
     setDrinkSending(false)
     if (data.success) {
+      capture('drink_sent', { alcohol_type: drinkType })
       setDrinkOpen(false)
       setDrinkType('')
       setDrinkRecipient('')

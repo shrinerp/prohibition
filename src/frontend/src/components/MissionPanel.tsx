@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { getMissionCardDisplay, type MissionCardDisplay } from '../data/missions'
 
 interface HeldMission {
@@ -18,12 +18,15 @@ interface PlayerState {
   totalCashEarned: number
   consecutiveCleanSeasons: number
   citiesOwned: number
+  maxVehicleStationary: number
 }
 
 interface MissionPanelProps {
   missions: HeldMission[]
+  completedMissions?: number
   onClose: () => void
   onDrawCard: () => void
+  onAbandon: (missionId: number) => void
   canDraw: boolean
   playerState?: PlayerState
 }
@@ -125,6 +128,15 @@ function computeProgress(
     case 'turns_without_arrest':
       if (!playerState) return null
       return simpleProgress(playerState.consecutiveCleanSeasons)
+    case 'times_jailed':
+      return simpleProgress(Number(progressData.times_jailed) || 0)
+    case 'vehicles_abandoned':
+      return simpleProgress(Number(progressData.vehicles_abandoned) || 0)
+    case 'vehicles_broken_down':
+      return simpleProgress(Number(progressData.vehicles_broken_down) || 0)
+    case 'vehicle_stationary_gte':
+      if (!playerState) return null
+      return simpleProgress(playerState.maxVehicleStationary ?? 0)
 
     default:
       return null
@@ -149,11 +161,17 @@ function objectiveLabel(card: MissionCardDisplay): string {
     case 'cities_visited':        return `Visit ${params.target} cities`
     case 'turns_without_arrest':  return `${params.target} clean seasons`
     case 'sabotages_completed':   return `Sabotage ${params.target} rivals`
+    case 'times_jailed':          return `Go to jail ${params.target} time${Number(params.target) !== 1 ? 's' : ''}`
+    case 'vehicles_abandoned':    return `Abandon ${params.target} vehicle${Number(params.target) !== 1 ? 's' : ''}`
+    case 'vehicles_broken_down':  return `Break down ${params.target} vehicle${Number(params.target) !== 1 ? 's' : ''}`
+    case 'vehicle_stationary_gte': return `Park a vehicle for ${params.target} seasons`
     default:                      return card.objectiveType
   }
 }
 
-export default function MissionPanel({ missions, onClose, onDrawCard, canDraw, playerState }: MissionPanelProps) {
+export default function MissionPanel({ missions, completedMissions = 0, onClose, onDrawCard, onAbandon, canDraw, playerState }: MissionPanelProps) {
+  const [confirmAbandon, setConfirmAbandon] = useState<number | null>(null)
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/70" onClick={onClose} />
@@ -163,7 +181,7 @@ export default function MissionPanel({ missions, onClose, onDrawCard, canDraw, p
         <div className="flex items-center justify-between px-4 py-3 border-b border-stone-700 flex-shrink-0">
           <div>
             <p className="text-xs text-stone-500 uppercase tracking-wider">Mission Cards</p>
-            <p className="text-amber-300 font-bold">{missions.length}/3 held</p>
+            <p className="text-amber-300 font-bold">{missions.length}/3 held · <span className="text-green-400">{completedMissions} completed</span></p>
           </div>
           <button onClick={onClose} className="text-stone-500 hover:text-stone-200 text-xl leading-none">✕</button>
         </div>
@@ -222,9 +240,43 @@ export default function MissionPanel({ missions, onClose, onDrawCard, canDraw, p
                     )}
                   </div>
 
-                  <div className="px-3 pb-3 flex items-center justify-between">
-                    <span className="text-green-400 font-bold text-sm">+${card.reward.toLocaleString()}</span>
-                    <span className="text-amber-600 text-xs">⚠ costs ${card.reward.toLocaleString()} if unfinished</span>
+                  <div className="px-3 pb-3">
+                    {confirmAbandon === m.id ? (
+                      <div className="bg-stone-900 border border-red-800 rounded-lg px-3 py-2 space-y-2">
+                        <p className="text-red-300 text-xs font-semibold">
+                          Abandon this mission? You'll pay the <span className="text-red-400">${card.reward.toLocaleString()}</span> penalty and draw a replacement.
+                        </p>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => { onAbandon(m.id); setConfirmAbandon(null) }}
+                            className="flex-1 py-1.5 bg-red-700 hover:bg-red-600 text-white text-xs font-bold rounded uppercase tracking-wide transition"
+                          >
+                            Confirm Abandon
+                          </button>
+                          <button
+                            onClick={() => setConfirmAbandon(null)}
+                            className="flex-1 py-1.5 bg-stone-700 hover:bg-stone-600 text-stone-300 text-xs font-bold rounded uppercase tracking-wide transition"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between">
+                        <span className="text-green-400 font-bold text-sm">+${card.reward.toLocaleString()}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-amber-600 text-xs">⚠ costs ${card.reward.toLocaleString()} if unfinished</span>
+                          <button
+                            onClick={() => setConfirmAbandon(m.id)}
+                            disabled={(playerState?.cash ?? 0) < card.reward}
+                            className="text-stone-500 hover:text-red-400 disabled:opacity-40 disabled:cursor-not-allowed disabled:no-underline text-xs underline transition"
+                            title={(playerState?.cash ?? 0) < card.reward ? `Need $${card.reward.toLocaleString()} to abandon — you only have $${(playerState?.cash ?? 0).toLocaleString()}` : 'Abandon this mission (pay penalty)'}
+                          >
+                            Abandon
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )

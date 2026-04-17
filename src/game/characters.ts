@@ -106,6 +106,36 @@ export const CHARACTER_CLASSES: Record<string, CharacterClass> = {
     perk: 'Owned coastal cities produce double volume',
     drawback: '-15% Sell price everywhere (sells wholesale)',
     modifiers: { ...DEFAULT_MODIFIERS, coastalProductionMultiplier: 2.0, sellPriceMultiplier: 0.85 }
+  },
+  // ── NPC archetypes ─────────────────────────────────────────────────────────
+  npc_merchant: {
+    id: 'npc_merchant',
+    name: 'The Merchant',
+    perk: 'Sells all distillery stock every season',
+    drawback: '',
+    modifiers: { ...DEFAULT_MODIFIERS }
+  },
+  npc_expander: {
+    id: 'npc_expander',
+    name: 'The Expander',
+    perk: 'Claims neutral cities aggressively',
+    drawback: '',
+    modifiers: { ...DEFAULT_MODIFIERS }
+  },
+  npc_industrialist: {
+    id: 'npc_industrialist',
+    name: 'The Industrialist',
+    perk: '+10% production; upgrades stills as first priority',
+    drawback: '',
+    modifiers: { ...DEFAULT_MODIFIERS, productionMultiplier: 1.1 }
+  },
+  // Legacy alias — existing games created before archetype system
+  npc_syndicate: {
+    id: 'npc_syndicate',
+    name: 'The Syndicate',
+    perk: '',
+    drawback: '',
+    modifiers: { ...DEFAULT_MODIFIERS }
   }
 }
 

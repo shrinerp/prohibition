@@ -19,7 +19,7 @@ const VEHICLES: VehicleSpec[] = [
 interface MapCity { id: number; name: string }
 
 interface VehicleState {
-  id: number; vehicleType: string; cityId: number; heat: number
+  id: number; vehicleType: string; cityId: number; heat: number; saleValue: number
   inventory: Array<{ alcohol_type: string; quantity: number }>
 }
 
@@ -29,7 +29,9 @@ interface VehicleDialogProps {
   isMyTurn: boolean
   mapCities: MapCity[]
   vehiclePrices: Record<string, number>
+  carLimit: number
   onBuy: (vehicleType: string) => void
+  onSell: (vehicleId: number) => void
   onClose: () => void
 }
 
@@ -55,7 +57,7 @@ function CargoBar({ slots }: { slots: number }) {
   )
 }
 
-export default function VehicleDialog({ vehicles, cash, isMyTurn, mapCities, vehiclePrices, onBuy, onClose }: VehicleDialogProps) {
+export default function VehicleDialog({ vehicles, cash, isMyTurn, mapCities, vehiclePrices, carLimit, onBuy, onSell, onClose }: VehicleDialogProps) {
   const [tab, setTab] = useState<'fleet' | 'buy'>('fleet')
 
   return (
@@ -68,6 +70,7 @@ export default function VehicleDialog({ vehicles, cash, isMyTurn, mapCities, veh
           <div>
             <p className="text-xs text-stone-500 uppercase tracking-wider">Fleet</p>
             <p className="text-amber-300 font-bold">{vehicles.length} Car{vehicles.length !== 1 ? 's' : ''} — {vehicles.length + 1}d6 per roll</p>
+            <p className="text-xs text-stone-500">Limit: {carLimit} car{carLimit !== 1 ? 's' : ''} · claim more cities to expand</p>
           </div>
           <div className="flex items-center gap-3">
             <span className="text-xs text-stone-400">
@@ -127,7 +130,7 @@ export default function VehicleDialog({ vehicles, cash, isMyTurn, mapCities, veh
                       <span className="text-xs text-stone-400 tabular-nums w-8">{v.heat}%</span>
                     </div>
                     {/* Cargo */}
-                    <div className="text-xs text-stone-500">
+                    <div className="text-xs text-stone-500 mb-2">
                       Cargo: <span className="text-amber-400 font-bold">{cargoUsed}/{cargoSlots}</span>
                       {v.inventory.filter(inv => inv.quantity > 0).length > 0 && (
                         <span className="ml-2 text-stone-500">
@@ -135,16 +138,34 @@ export default function VehicleDialog({ vehicles, cash, isMyTurn, mapCities, veh
                         </span>
                       )}
                     </div>
+                    {/* Sell button — disabled for lead car (index 0) or when not your turn */}
+                    {i > 0 && (
+                      <button
+                        disabled={!isMyTurn}
+                        onClick={() => onSell(v.id)}
+                        title={isMyTurn ? `Sell for $${v.saleValue.toLocaleString()} (50% of purchase price). Cargo will be abandoned.` : 'Not your turn'}
+                        className="w-full py-1 border border-red-800 hover:bg-red-900/40 disabled:opacity-40 disabled:cursor-not-allowed text-red-400 text-xs font-bold rounded uppercase tracking-wide transition"
+                      >
+                        Sell — ${v.saleValue.toLocaleString()}
+                      </button>
+                    )}
                   </div>
                 )
               })}
             </div>
           ) : (
             <div className="space-y-3">
-              <p className="text-xs text-stone-500 mb-3">New car spawns at your home city. Each car adds +1 die to your movement roll.</p>
+              {vehicles.length >= carLimit ? (
+                <div className="rounded border border-stone-700 bg-stone-800/50 px-3 py-2.5 text-xs text-stone-500">
+                  You have reached your car limit ({carLimit}). Claim more cities to unlock additional cars.
+                </div>
+              ) : (
+                <p className="text-xs text-stone-500 mb-3">New car spawns at your home city. Each car adds +1 die to your movement roll.</p>
+              )}
               {VEHICLES.map(v => {
                 const price = vehiclePrices[v.id] ?? v.price
-                const canAfford = isMyTurn && cash >= price
+                const atLimit = vehicles.length >= carLimit
+                const canAfford = isMyTurn && cash >= price && !atLimit
                 return (
                   <div key={v.id} className="rounded border border-stone-700 bg-stone-800 overflow-hidden">
                     <div className="relative h-28 bg-stone-950 flex items-end justify-center px-4">

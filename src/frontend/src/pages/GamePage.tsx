@@ -13,6 +13,7 @@ import JailOverlay      from '../components/JailOverlay'
 import CityDetailDialog     from '../components/CityDetailDialog'
 import CelebrationDialog, { type Celebration } from '../components/CelebrationDialog'
 import NetWorthDialog from '../components/NetWorthDialog'
+import LedgerDialog from '../components/LedgerDialog'
 import ChatPanel from '../components/ChatPanel'
 import CityMapDialog from '../components/CityMapDialog'
 import DrinkDialog from '../components/DrinkDialog'
@@ -53,10 +54,29 @@ function getSeasonLabel(season: number, totalSeasons = 52): string {
 
 const PLAYER_COLORS = ['#ef4444', '#3b82f6', '#22c55e', '#f97316', '#a855f7']
 
+// ── Turn Timer ─────────────────────────────────────────────────────────────
+function TurnTimer({ startedAt }: { startedAt: string | null }) {
+  const [elapsed, setElapsed] = useState(0)
+  useEffect(() => {
+    if (!startedAt) return
+    const update = () => setElapsed(Math.floor((Date.now() - new Date(startedAt + 'Z').getTime()) / 1000))
+    update()
+    const id = setInterval(update, 1000)
+    return () => clearInterval(id)
+  }, [startedAt])
+  if (!startedAt) return null
+  const h = Math.floor(elapsed / 3600)
+  const m = Math.floor((elapsed % 3600) / 60)
+  const s = elapsed % 60
+  const display = h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s}s` : `${s}s`
+  return <span className="text-xs text-amber-400 ml-1">({display})</span>
+}
+
 // ── Types ──────────────────────────────────────────────────────────────────
 interface PlayerInfo {
   id: number; turnOrder: number; characterClass: string
   isNpc: boolean; currentCityId: number | null; name: string
+  turnStartedAt: string | null
 }
 
 interface VehicleState {
@@ -69,7 +89,7 @@ interface FullState {
   game: {
     status: string; currentSeason: number; totalSeasons: number
     currentPlayerIndex: number; turnDeadline: string | null
-    inviteCode: string; gameName: string | null; isHost: boolean; maxPlayers: number
+    inviteCode: string; gameName: string | null; isHost: boolean; maxPlayers: number; isPublic: boolean
   }
   player: {
     id: number; turnOrder: number; characterClass: string
@@ -87,7 +107,7 @@ interface FullState {
     vehicles: VehicleState[]
     distilleryCityIds: number[]
     bribedCityIds: number[]
-    distilleries: Array<{ id: number; cityId: number; tier: number; primaryAlcohol: string; cityName: string }>
+    distilleries: Array<{ id: number; cityId: number; tier: number; primaryAlcohol: string; cityName: string; isCoastal: boolean }>
     missions: Array<{ id: number; cardId: number; progress: Record<string, unknown>; assignedSeason: number }>
     completedMissions: number
     totalCashEarned: number
@@ -332,6 +352,7 @@ export default function GamePage() {
   const [distilleriesOpen, setDistilleriesOpen] = useState(false)
   const [vehiclesOpen, setVehiclesOpen] = useState(false)
   const [netWorthOpen, setNetWorthOpen] = useState(false)
+  const [ledgerOpen, setLedgerOpen] = useState(false)
   const [turnPending, setTurnPending] = useState(false)
   const [cityMapOpen, setCityMapOpen] = useState(false)
   const [showYourTurnDialog, setShowYourTurnDialog] = useState(false)
@@ -364,8 +385,13 @@ export default function GamePage() {
         fetch(`/api/games/${gameId}/map`),
         fetch(`/api/games/${gameId}/market`)
       ])
-      if (stateRes.status === 401 || stateRes.status === 403) {
+      if (stateRes.status === 401) {
         nav(`/login?redirect=/games/${gameId}`)
+        return
+      }
+      if (stateRes.status === 403) {
+        // No longer in this game (e.g. booted) — go back to lobby list
+        nav('/games')
         return
       }
 
@@ -635,10 +661,46 @@ export default function GamePage() {
   const homeCity = player?.homeCityId != null
     ? mapCities.find(c => c.id === player.homeCityId) ?? null
     : null
-  const STILL_OUTPUT: Record<number, number> = { 1: 2, 2: 4, 3: 7, 4: 11, 5: 17 }
+
+  // Live net worth = cash + cargo (at avg market price) + vehicles + distilleries + owned cities
+  const liveNetWorth = React.useMemo(() => {
+    if (!player) return 0
+    const DIST_VAL: Record<number, number> = { 1: 50, 2: 175, 3: 425, 4: 900, 5: 1900 }
+    const BASE_PRICES: Record<string, number> = {
+      beer: 15, gin: 25, rum: 20, whiskey: 30, moonshine: 20,
+      vodka: 22, bourbon: 28, rye: 26, scotch: 35, tequila: 24,
+      brandy: 28, wine: 18, vermouth: 22, malort: 15,
+    }
+    // Average market price per alcohol type across all cities
+    const priceAcc: Record<string, { sum: number; n: number }> = {}
+    for (const p of marketPrices) {
+      if (!priceAcc[p.alcoholType]) priceAcc[p.alcoholType] = { sum: 0, n: 0 }
+      priceAcc[p.alcoholType].sum += p.price
+      priceAcc[p.alcoholType].n++
+    }
+    const avgPrice = (type: string) => priceAcc[type]
+      ? Math.round(priceAcc[type].sum / priceAcc[type].n)
+      : (BASE_PRICES[type] ?? 0)
+
+    const cargoVal  = player.vehicles.reduce((s, v) => s + v.inventory.reduce((vs, i) => vs + i.quantity * avgPrice(i.alcohol_type), 0), 0)
+    const vehVal    = player.vehicles.reduce((s, v) => s + (fullState?.vehiclePrices[v.vehicleType] ?? 200), 0)
+    const distVal   = player.distilleries.reduce((s, d) => s + (DIST_VAL[d.tier] ?? 50), 0)
+    const cityVal   = mapCities.filter(c => c.owner_player_id === player.id).reduce((s, c) => s + (c.claim_cost ?? 0), 0)
+    return player.cash + cargoVal + vehVal + distVal + cityVal
+  }, [player, marketPrices, mapCities, fullState?.vehiclePrices])
+  const STILL_BASE_OUTPUT: Record<number, number> = { 1: 2, 2: 4, 3: 7, 4: 11, 5: 17 }
   const STILL_UPGRADE_COST: Record<number, number> = { 1: 200, 2: 500, 3: 1000, 4: 2000, 5: 4000 }
+  const PROD_MULT: Record<string, number> = { union_leader: 1.2, socialite: 0.8, vixen: 0.9, npc_industrialist: 1.1 }
+  const COASTAL_MULT: Record<string, number> = { rum_runner: 2.0 }
+  function stillOutput(tier: number, isCoastal: boolean): number {
+    const base = STILL_BASE_OUTPUT[tier] ?? 4
+    const charClass = player?.characterClass ?? ''
+    const prod = PROD_MULT[charClass] ?? 1.0
+    const coastal = isCoastal ? (COASTAL_MULT[charClass] ?? 1.0) : 1.0
+    return Math.floor(base * prod * coastal)
+  }
   const homeDistillery = (player?.distilleries ?? []).find(d => d.cityId === player?.homeCityId) ?? null
-  const homeProduction = homeDistillery ? (STILL_OUTPUT[homeDistillery.tier] ?? 4) : 0
+  const homeProduction = homeDistillery ? stillOutput(homeDistillery.tier, homeDistillery.isCoastal) : 0
 
   // City stockpile: city_id → total units available
   const cityStockpileTotal = React.useMemo(() => {
@@ -782,6 +844,17 @@ export default function GamePage() {
     setStarting(true)
     await fetch(`/api/games/${gameId}/start`, { method: 'POST' })
     fetchAll()
+  }
+
+  async function bootPlayer(playerRowId: number) {
+    await fetch(`/api/games/${gameId}/players/${playerRowId}`, { method: 'DELETE' })
+    fetchAll()
+  }
+
+  async function leaveGame() {
+    if (!confirm(game?.isHost ? 'You are the host. Leaving will cancel the game for everyone. Continue?' : 'Leave this lobby?')) return
+    await fetch(`/api/games/${gameId}/leave`, { method: 'DELETE' })
+    nav('/games')
   }
 
   function rollToMove() {
@@ -1043,8 +1116,8 @@ export default function GamePage() {
         {/* Two-column grid — stacks on mobile */}
         <div className="max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
 
-          {/* Column 1 — Game setup */}
-          <div className="space-y-3">
+          {/* Column 1 — Game setup (visually second) */}
+          <div className="space-y-3 md:order-2">
 
             {/* Game identity card: invite code + game name + email invite */}
             <div className="bg-stone-900 border border-stone-700 rounded-xl overflow-hidden">
@@ -1135,6 +1208,33 @@ export default function GamePage() {
                 )}
               </div>
 
+              {/* Visibility toggle — host only */}
+              {game.isHost && (
+                <div className="px-4 py-3 border-b border-stone-800">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-stone-500 uppercase tracking-widest font-bold">Visibility</p>
+                      <p className="text-xs text-stone-600 mt-0.5">
+                        {game.isPublic ? 'Anyone can find and join this game' : 'Only people with the invite code can join'}
+                      </p>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        await fetch(`/api/games/${gameId}/visibility`, {
+                          method: 'PATCH',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ isPublic: !game.isPublic }),
+                        })
+                        fetchAll()
+                      }}
+                      className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${game.isPublic ? 'bg-amber-500' : 'bg-stone-700'}`}
+                    >
+                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${game.isPublic ? 'translate-x-5' : 'translate-x-0'}`} />
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Players readiness */}
               <div className="px-4 pt-3 pb-1">
                 <p className="text-xs text-stone-500 uppercase tracking-widest font-bold mb-2">Players</p>
@@ -1166,6 +1266,14 @@ export default function GamePage() {
                     <span className={`text-base flex-shrink-0 ${selected ? 'text-green-400' : 'text-stone-600'}`}>
                       {selected ? '✓' : '○'}
                     </span>
+                    {game.isHost && !isMe && (
+                      <button
+                        onClick={() => bootPlayer(p.id)}
+                        className="text-stone-700 hover:text-red-400 text-base leading-none flex-shrink-0 transition cursor-pointer ml-1"
+                        title={`Boot ${p.name}`}
+                        aria-label={`Boot ${p.name}`}
+                      >×</button>
+                    )}
                   </div>
                 )
               })}
@@ -1189,10 +1297,24 @@ export default function GamePage() {
                 {iAmReady ? 'Ready — waiting for host to start…' : 'Select a character to get ready'}
               </p>
             )}
+            <button
+              onClick={leaveGame}
+              className="w-full py-1.5 text-stone-600 hover:text-red-400 text-xs transition cursor-pointer"
+            >
+              {game.isHost ? 'Cancel Game' : 'Leave Lobby'}
+            </button>
           </div>
 
-          {/* Column 2 — Character selection */}
-          <div className="space-y-3">
+          {/* Column 2 — Character selection (visually first) */}
+          <div className="space-y-3 md:order-1">
+
+            {/* Character carousel */}
+            <CharacterCarousel
+              characters={CHARACTERS}
+              myClass={myClass}
+              takenClasses={takenClasses}
+              onSelect={selectCharacter}
+            />
 
             {/* Why character choice matters */}
             <div className="bg-stone-900 border border-stone-700 rounded-xl overflow-hidden">
@@ -1212,14 +1334,6 @@ export default function GamePage() {
                 <p className="text-stone-600 text-xs italic">Hint: your starting city's primary alcohol affects how well each build performs.</p>
               </div>
             </div>
-
-            {/* Character carousel */}
-            <CharacterCarousel
-              characters={CHARACTERS}
-              myClass={myClass}
-              takenClasses={takenClasses}
-              onSelect={selectCharacter}
-            />
           </div>
 
         </div>
@@ -1299,6 +1413,15 @@ export default function GamePage() {
             title="Standings"
           >
             🏆
+          </button>
+        )}
+        {gameId && (
+          <button
+            onClick={() => setLedgerOpen(true)}
+            className="flex items-center gap-1 px-2 py-1 rounded bg-stone-700 hover:bg-stone-600 text-stone-300 hover:text-amber-400 text-xs transition flex-shrink-0"
+            title="Ledger"
+          >
+            📒
           </button>
         )}
         <button
@@ -1401,16 +1524,17 @@ export default function GamePage() {
               </div>
 
               <div className="bg-stone-800 border border-stone-600 rounded p-3">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs text-stone-400 uppercase tracking-wider">Cash</p>
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-xs text-stone-400 uppercase tracking-wider">Net Worth</p>
                   <button
                     onClick={() => setNetWorthOpen(true)}
                     className="text-xs text-stone-500 hover:text-amber-300 underline underline-offset-2 transition"
                   >
-                    Net Worth
+                    Breakdown
                   </button>
                 </div>
-                <p className="text-2xl font-bold text-green-400">${(player?.cash ?? 0).toLocaleString()}</p>
+                <p className="text-2xl font-bold text-green-400">${liveNetWorth.toLocaleString()}</p>
+                <p className="text-xs text-stone-500 mt-0.5">Cash ${(player?.cash ?? 0).toLocaleString()}</p>
               </div>
 
               {homeCity && (() => {
@@ -1468,7 +1592,7 @@ export default function GamePage() {
                           </div>
                           <p className="text-stone-400 mt-0.5 capitalize">
                             <span className="text-green-400 font-semibold">{d.primaryAlcohol}</span>
-                            {' · '}+{STILL_OUTPUT[d.tier] ?? 4} units/season
+                            {' · '}+{stillOutput(d.tier, d.isCoastal)} units/season
                           </p>
                           <div className="mt-1.5 flex gap-0.5">
                             {Array.from({ length: 5 }, (_, i) => (
@@ -1527,6 +1651,11 @@ export default function GamePage() {
         {/* Net worth dialog */}
         {netWorthOpen && gameId && (
           <NetWorthDialog gameId={gameId} onClose={() => setNetWorthOpen(false)} />
+        )}
+
+        {/* Ledger dialog */}
+        {ledgerOpen && gameId && (
+          <LedgerDialog gameId={gameId} onClose={() => setLedgerOpen(false)} />
         )}
 
         {/* City Map dialog */}
@@ -2389,6 +2518,9 @@ export default function GamePage() {
                   >
                     {p.name}{p.isNpc ? ' (NPC)' : ''}
                     {p.turnOrder === game?.currentPlayerIndex ? ' ●' : ''}
+                    {p.turnOrder === game?.currentPlayerIndex && !p.isNpc && (
+                      <TurnTimer startedAt={p.turnStartedAt} />
+                    )}
                   </button>
                 </div>
               ))}
