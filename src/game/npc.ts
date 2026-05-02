@@ -1,5 +1,5 @@
 import { getUpgradeCost, DISTILLERY_TIERS } from './production'
-import { VEHICLES, calculateEffectiveMovement } from './movement'
+import { VEHICLES, calculateEffectiveMovement, resolveMovement, type RoadSegment } from './movement'
 import {
   rollPoliceEncounter, resolveBribe, resolveSubmit, resolveRun,
   calculateSpotBribeCost, type PopulationTier,
@@ -89,6 +89,79 @@ function findReachableCities(
     if (cityId !== startCityId) result.push({ cityId, cost })
   }
   return result
+}
+
+/**
+ * Select the best target city for an NPC to move toward.
+ * Expander prefers nearest neutral, then nearest competitor, then random.
+ * All other archetypes pick randomly.
+ * Exported for unit testing.
+ */
+export function selectNpcTarget(
+  candidates: ReachableCity[],
+  cityOwnership: Map<number, number | null>,
+  npcId: number,
+  archetype: NpcArchetype
+): ReachableCity | null {
+  if (candidates.length === 0) return null
+
+  if (archetype === 'npc_expander') {
+    const sorted = [...candidates].sort((a, b) => a.cost - b.cost)
+    const neutral = sorted.filter(r => cityOwnership.get(r.cityId) === null)
+    if (neutral.length > 0) return neutral[0]
+    const competitor = sorted.filter(r => {
+      const owner = cityOwnership.get(r.cityId)
+      return owner !== null && owner !== npcId
+    })
+    if (competitor.length > 0) return competitor[0]
+  }
+
+  return candidates[Math.floor(Math.random() * candidates.length)]
+}
+
+/**
+ * Find the shortest path from startCityId to targetCityId using roads.
+ * Returns an ordered array of city IDs EXCLUDING the start city,
+ * suitable for passing to resolveMovement as targetPath.
+ * Returns [] if no path exists or start === target.
+ */
+function pathToCity(startCityId: number, targetCityId: number, roads: RoadRow[]): number[] {
+  if (startCityId === targetCityId) return []
+
+  const dist = new Map<number, number>([[startCityId, 0]])
+  const prev = new Map<number, number>()
+  const queue: Array<{ cityId: number; cost: number }> = [{ cityId: startCityId, cost: 0 }]
+
+  while (queue.length > 0) {
+    queue.sort((a, b) => a.cost - b.cost)
+    const { cityId, cost } = queue.shift()!
+    if (cityId === targetCityId) break
+    if (cost > (dist.get(cityId) ?? Infinity)) continue
+
+    for (const road of roads) {
+      let neighbor: number | null = null
+      if (road.from_city_id === cityId) neighbor = road.to_city_id
+      else if (road.to_city_id === cityId) neighbor = road.from_city_id
+      if (neighbor === null) continue
+
+      const newCost = cost + road.distance_value
+      if (newCost < (dist.get(neighbor) ?? Infinity)) {
+        dist.set(neighbor, newCost)
+        prev.set(neighbor, cityId)
+        queue.push({ cityId: neighbor, cost: newCost })
+      }
+    }
+  }
+
+  if (!prev.has(targetCityId)) return []
+
+  const path: number[] = []
+  let step: number | undefined = targetCityId
+  while (step !== undefined && step !== startCityId) {
+    path.unshift(step)
+    step = prev.get(step)
+  }
+  return path
 }
 
 // ── Main NPC turn ────────────────────────────────────────────────────────────
@@ -229,34 +302,31 @@ export async function runNpcTurn(
     `SELECT from_city_id, to_city_id, distance_value FROM roads WHERE game_id = ?`
   ).bind(gameId).all<RoadRow>()
 
-  const reachable = findReachableCities(vehicle.city_id, allRoads, movementPoints)
+  // Look up to 3 turns ahead so NPCs move toward distant preferred cities
+  const candidates = findReachableCities(vehicle.city_id, allRoads, movementPoints * 3)
 
   let destinationCityId = vehicle.city_id  // default: stay
 
-  if (reachable.length > 0) {
-    // Pick destination: expander prefers unclaimed/competitor cities; others random
-    let chosen: ReachableCity
+  if (candidates.length > 0) {
+    // Fetch ownership only for expander preference logic
+    const cityInfo = archetype === 'npc_expander'
+      ? await fetchCityOwnership(db, gameId, candidates.map(r => r.cityId))
+      : new Map<number, number | null>()
 
-    if (archetype === 'npc_expander') {
-      // Prefer neutral cities, then competitor cities, then random
-      const cityInfo = await fetchCityOwnership(db, gameId, reachable.map(r => r.cityId))
-      const neutral = reachable.filter(r => cityInfo.get(r.cityId) === null)
-      const competitor = reachable.filter(r => {
-        const owner = cityInfo.get(r.cityId)
-        return owner !== null && owner !== npcId
-      })
-      if (neutral.length > 0) {
-        chosen = neutral[Math.floor(Math.random() * neutral.length)]
-      } else if (competitor.length > 0) {
-        chosen = competitor[Math.floor(Math.random() * competitor.length)]
-      } else {
-        chosen = reachable[Math.floor(Math.random() * reachable.length)]
+    const chosen = selectNpcTarget(candidates, cityInfo, npcId, archetype)
+
+    if (chosen && chosen.cityId !== vehicle.city_id) {
+      // Walk hop-by-hop toward target using resolveMovement — same model as human players.
+      // NPC lands at the furthest city along the path affordable with current movement points.
+      const targetPath = pathToCity(vehicle.city_id, chosen.cityId, allRoads)
+      if (targetPath.length > 0) {
+        const roadSegs: RoadSegment[] = allRoads.map(r => ({
+          fromCityId: r.from_city_id, toCityId: r.to_city_id, distanceValue: r.distance_value
+        }))
+        const moveResult = resolveMovement(vehicle.city_id, targetPath, roadSegs, movementPoints)
+        destinationCityId = moveResult.currentCityId
       }
-    } else {
-      chosen = reachable[Math.floor(Math.random() * reachable.length)]
     }
-
-    destinationCityId = chosen.cityId
 
     await db.batch([
       db.prepare(`UPDATE vehicles SET city_id = ?, stationary_since = ? WHERE id = ?`)

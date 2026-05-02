@@ -4,6 +4,7 @@ import {
   applyWealthDecay,
   selectNpcAction,
   computeNpcTakeoverCost,
+  selectNpcTarget,
   type NpcState,
   type NpcAction
 } from '../src/game/npc'
@@ -75,6 +76,46 @@ describe('selectNpcAction()', () => {
     const npc: NpcState = { ...baseNpc, isInJail: true }
     const action = selectNpcAction(npc, true, true, true)
     expect(action).toBe('sell')
+  })
+})
+
+describe('selectNpcTarget()', () => {
+  const candidates = [
+    { cityId: 1, cost: 3 },
+    { cityId: 2, cost: 5 },
+    { cityId: 3, cost: 8 },
+  ]
+  const ownership = new Map<number, number | null>([
+    [1, null],  // neutral
+    [2, 99],    // competitor (npc is 50)
+    [3, 50],    // own city
+  ])
+
+  it('expander picks nearest neutral city', () => {
+    const result = selectNpcTarget(candidates, ownership, 50, 'npc_expander')
+    expect(result?.cityId).toBe(1)
+  })
+
+  it('expander falls back to nearest competitor when no neutral', () => {
+    const noNeutral = new Map<number, number | null>([[1, 99], [2, 99], [3, 50]])
+    const result = selectNpcTarget(candidates, noNeutral, 50, 'npc_expander')
+    expect(result?.cityId).toBe(1) // nearest competitor
+  })
+
+  it('expander falls back to random when only own cities available', () => {
+    const allOwn = new Map<number, number | null>([[1, 50], [2, 50], [3, 50]])
+    const result = selectNpcTarget(candidates, allOwn, 50, 'npc_expander')
+    expect(result).not.toBeNull()
+  })
+
+  it('non-expander picks randomly from candidates', () => {
+    const result = selectNpcTarget(candidates, ownership, 50, 'npc_merchant')
+    expect(result).not.toBeNull()
+    expect([1, 2, 3]).toContain(result!.cityId)
+  })
+
+  it('returns null when candidates is empty', () => {
+    expect(selectNpcTarget([], ownership, 50, 'npc_expander')).toBeNull()
   })
 })
 
