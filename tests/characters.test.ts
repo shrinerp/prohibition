@@ -87,9 +87,9 @@ describe('Pharmacist modifiers', () => {
     expect(applyTakeoverCostModifier('pharmacist', 1000)).toBeCloseTo(1250)
   })
 
-  it('medicinal sell multiplier is 1.5x', () => {
+  it('medicinal sell multiplier is 1.3x', () => {
     const char = getCharacter('pharmacist')!
-    expect(char.modifiers.medicinalPriceMultiplier).toBeCloseTo(1.5)
+    expect(char.modifiers.medicinalPriceMultiplier).toBeCloseTo(1.3)
   })
 })
 

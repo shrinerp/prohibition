@@ -72,8 +72,8 @@ describe('applySellModifier()', () => {
     expect(applySellModifier(100, 'socialite', 'bourbon')).toBeCloseTo(125)
   })
 
-  it('applies Pharmacist 1.5× for medicinal spirits (moonshine)', () => {
-    expect(applySellModifier(100, 'pharmacist', 'moonshine')).toBeCloseTo(150)
+  it('applies Pharmacist 1.3× for medicinal spirits (whiskey)', () => {
+    expect(applySellModifier(100, 'pharmacist', 'whiskey')).toBeCloseTo(130)
   })
 
   it('applies only generic sellPriceMultiplier for Pharmacist on non-moonshine', () => {

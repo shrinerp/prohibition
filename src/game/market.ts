@@ -103,7 +103,7 @@ export function calculateCityPrice(
 
 /**
  * Apply character sell modifiers to a city price.
- * - Pharmacist: 1.5× when selling moonshine ("Medicinal Spirits")
+ * - Pharmacist: 1.3× when selling whiskey ("Medicinal Spirits")
  * - Socialite: 1.15× on any type
  */
 export function applySellModifier(
@@ -114,8 +114,8 @@ export function applySellModifier(
   const char = getCharacter(characterClass)
   if (!char) return price
 
-  // Pharmacist sells moonshine as Medicinal Spirits at medicinalPriceMultiplier
-  if (characterClass === 'pharmacist' && alcoholType === 'moonshine') {
+  // Pharmacist sells whiskey as Medicinal Spirits at medicinalPriceMultiplier
+  if (characterClass === 'pharmacist' && alcoholType === 'whiskey') {
     return Math.floor(price * char.modifiers.medicinalPriceMultiplier)
   }
 

@@ -68,9 +68,9 @@ export const CHARACTER_CLASSES: Record<string, CharacterClass> = {
   pharmacist: {
     id: 'pharmacist',
     name: 'The Pharmacist',
-    perk: 'Sell whiskey at +50% market value (medicinal prescription)',
+    perk: 'Sell whiskey at +30% market value (medicinal prescription)',
     drawback: 'Hostile Takeover costs +25%',
-    modifiers: { ...DEFAULT_MODIFIERS, takeoverCostMultiplier: 1.25, medicinalPriceMultiplier: 1.5 }
+    modifiers: { ...DEFAULT_MODIFIERS, takeoverCostMultiplier: 1.25, medicinalPriceMultiplier: 1.3 }
   },
   jazz_singer: {
     id: 'jazz_singer',
