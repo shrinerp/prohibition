@@ -159,7 +159,7 @@ export async function runNpcTurn(
       `SELECT pending_sightings FROM game_players WHERE id = ?`
     ).bind(npcId).first<{ pending_sightings: string | null }>()
     const sightings = sightingsRaw?.pending_sightings
-      ? JSON.parse(sightingsRaw.pending_sightings) as Array<{ playerName: string; cityId: number; season: number }>
+      ? JSON.parse(sightingsRaw.pending_sightings) as Array<{ playerId: number; playerName: string; cityId: number; season: number }>
       : []
 
     if (sightings.length >= 2) {
@@ -194,8 +194,8 @@ export async function runNpcTurn(
               `UPDATE game_players SET jail_until_season = ?, jailed_count = jailed_count + 1 WHERE id = ?`
             ).bind(season + jailTime, target.id).run()
             await db.prepare(
-              `INSERT INTO game_messages (game_id, player_id, message, is_system) VALUES (?, NULL, ?, 1)`
-            ).bind(gameId, `🕵️ An accusation was brought against ${targetName}. ${targetName} has been sent to jail by the feds.`).run()
+              `INSERT INTO game_messages (game_id, player_id, message, is_system) VALUES (?, ?, ?, 1)`
+            ).bind(gameId, npcId, `🕵️ An accusation was brought against ${targetName}. ${targetName} has been sent to jail by the feds.`).run()
           }
           break
         }
@@ -264,6 +264,31 @@ export async function runNpcTurn(
       db.prepare(`UPDATE game_players SET current_city_id = ? WHERE id = ?`)
         .bind(destinationCityId, npcId),
     ])
+
+    // Informant sighting detection — check if any snitch has an informant in destination city
+    if (destinationCityId !== vehicle.city_id) {
+      const { results: watchingInformants } = await db.prepare(
+        `SELECT i.snitch_id FROM informants i WHERE i.city_id = ? AND i.game_id = ? AND i.snitch_id != ?`
+      ).bind(destinationCityId, gameId, npcId).all<{ snitch_id: number }>()
+      if (watchingInformants.length > 0) {
+        const cityNameRow = await db.prepare(
+          `SELECT cp.name FROM game_cities gc JOIN city_pool cp ON gc.city_pool_id = cp.id WHERE gc.id = ?`
+        ).bind(destinationCityId).first<{ name: string }>()
+        const sightingCityName = cityNameRow?.name ?? 'Unknown'
+        const sightingPlayer = displayName.replace(/@.*$/, '')
+        const sighting = { playerId: npcId, playerName: sightingPlayer, cityId: destinationCityId, cityName: sightingCityName, season }
+        for (const inf of watchingInformants) {
+          const snitchRow = await db.prepare(
+            `SELECT pending_sightings FROM game_players WHERE id = ?`
+          ).bind(inf.snitch_id).first<{ pending_sightings: string | null }>()
+          const existingSightings = snitchRow?.pending_sightings ? JSON.parse(snitchRow.pending_sightings) : []
+          existingSightings.push(sighting)
+          await db.prepare(
+            `UPDATE game_players SET pending_sightings = ? WHERE id = ?`
+          ).bind(JSON.stringify(existingSightings), inf.snitch_id).run()
+        }
+      }
+    }
 
     // Trap resolution — only fires when actually moving to a new city
     await resolveNpcTrap(db, gameId, npcId, destinationCityId, season, displayName)
@@ -437,6 +462,28 @@ async function tryUpgradeStill(
   return true
 }
 
+const BASE_CLAIM: Record<string, number> = { small: 500, medium: 1000, large: 1500, major: 2500 }
+
+/**
+ * Pure cost calculation for NPC city takeovers — mirrors human claim_city logic.
+ * @param claimCost  gc.claim_cost from DB (0 for cities never claimed before)
+ * @param populationTier  cp.population_tier
+ * @param existingTier  current distillery tier at the city (1 if none)
+ * @param isNeutral  true if the city is unclaimed
+ */
+export function computeNpcTakeoverCost(
+  claimCost: number,
+  populationTier: string,
+  existingTier: number,
+  isNeutral: boolean
+): number {
+  const storedCost = claimCost > 0 ? claimCost : (BASE_CLAIM[populationTier] ?? 500)
+  const baseCost = isNeutral ? storedCost : storedCost * 2
+  let stillUpgradeValue = 0
+  for (let t = 2; t <= existingTier; t++) stillUpgradeValue += DISTILLERY_TIERS[t]?.cost ?? 0
+  return baseCost + stillUpgradeValue
+}
+
 /** Claim the given city if it's unclaimed (all archetypes) or competitor-owned (expander). */
 async function tryClaimCity(
   db: D1Database,
@@ -446,37 +493,50 @@ async function tryClaimCity(
   cityId: number,
   displayName: string
 ): Promise<boolean> {
-  const BASE_CLAIM: Record<string, number> = { small: 500, medium: 1000, large: 1500, major: 2500 }
-
   const cityRow = await db.prepare(
-    `SELECT gc.id, gc.owner_player_id, cp.population_tier, cp.name AS city_name
+    `SELECT gc.id, gc.owner_player_id, gc.claim_cost, cp.population_tier, cp.name AS city_name
      FROM game_cities gc JOIN city_pool cp ON gc.city_pool_id = cp.id
      WHERE gc.id = ? AND gc.game_id = ?`
   ).bind(cityId, gameId).first<{
-    id: number; owner_player_id: number | null; population_tier: string; city_name: string
+    id: number; owner_player_id: number | null; claim_cost: number; population_tier: string; city_name: string
   }>()
   if (!cityRow) return false
   if (cityRow.owner_player_id === npcId) return false  // already ours
   if (cityRow.owner_player_id !== null && archetype !== 'npc_expander') return false  // only expander claims competitor cities
 
-  const cost = BASE_CLAIM[cityRow.population_tier] ?? 500
+  const isNeutral = cityRow.owner_player_id === null
+
+  // Query existing distillery tier for upgrade premium (mirrors human claim_city logic)
+  const existingDist = await db.prepare(
+    `SELECT tier FROM distilleries WHERE city_id = ? LIMIT 1`
+  ).bind(cityId).first<{ tier: number }>()
+  const existingTier = existingDist?.tier ?? 1
+
+  const cost = computeNpcTakeoverCost(cityRow.claim_cost, cityRow.population_tier, existingTier, isNeutral)
 
   const npcRow = await db.prepare(`SELECT cash FROM game_players WHERE id = ?`)
     .bind(npcId).first<{ cash: number }>()
   if (!npcRow || npcRow.cash < cost) return false
 
+  // Store base city price (not total paid) so future takeovers don't snowball
+  const baseCityPrice = BASE_CLAIM[cityRow.population_tier] ?? 500
+  const claimMsg = isNeutral
+    ? `🗺️ ${displayName} claimed ${cityRow.city_name} for $${cost.toLocaleString()}.`
+    : `⚔️ ${displayName} took over ${cityRow.city_name} for $${cost.toLocaleString()}.`
+
   await db.batch([
     db.prepare(`UPDATE game_players SET cash = cash - ? WHERE id = ?`).bind(cost, npcId),
     db.prepare(`UPDATE game_cities SET owner_player_id = ?, claim_cost = ? WHERE id = ?`)
-      .bind(npcId, cost, cityId),
+      .bind(npcId, baseCityPrice, cityId),
+    // Delete prior owner's distillery and any orphaned stockpile before inserting new one
+    db.prepare(`DELETE FROM distilleries WHERE city_id = ?`).bind(cityId),
+    db.prepare(`DELETE FROM city_inventory WHERE city_id = ? AND game_id = ?`).bind(cityId, gameId),
     db.prepare(
       `INSERT INTO distilleries (player_id, city_id, tier, still_number, purchase_price)
-       SELECT ?, ?, 1,
-              COALESCE((SELECT MAX(still_number) FROM distilleries WHERE player_id = ?), 0) + 1, 0
-       WHERE NOT EXISTS (SELECT 1 FROM distilleries WHERE player_id = ? AND city_id = ?)`
-    ).bind(npcId, cityId, npcId, npcId, cityId),
-    db.prepare(`INSERT INTO game_messages (game_id, player_id, message) VALUES (?, ?, ?)`)
-      .bind(gameId, npcId, `🗺️ ${displayName} claimed ${cityRow.city_name}!`),
+       SELECT ?, ?, 1, COALESCE((SELECT MAX(still_number) FROM distilleries WHERE player_id = ?), 0) + 1, 0`
+    ).bind(npcId, cityId, npcId),
+    db.prepare(`INSERT INTO game_messages (game_id, player_id, message, is_system) VALUES (?, ?, ?, 1)`)
+      .bind(gameId, npcId, claimMsg),
   ])
   return true
 }
@@ -640,20 +700,19 @@ async function resolveNpcTrap(
   displayName: string
 ): Promise<void> {
   const trapRow = await db.prepare(
-    `SELECT t.id, t.consequence_type, t.consequence_params,
-            COALESCE(gp_s.display_name, u_s.email) AS setter_name,
-            gp_s.current_city_id AS setter_current_city
+    `SELECT t.id, t.setter_player_id, t.consequence_type, t.consequence_params,
+            COALESCE(gp_s.display_name, u_s.email) AS setter_name
      FROM traps t
      JOIN game_players gp_s ON t.setter_player_id = gp_s.id
      LEFT JOIN users u_s ON gp_s.user_id = u_s.id
      WHERE t.game_id = ? AND t.city_id = ?`
   ).bind(gameId, cityId).first<{
-    id: number; consequence_type: string; consequence_params: string
-    setter_name: string | null; setter_current_city: number | null
+    id: number; setter_player_id: number; consequence_type: string; consequence_params: string
+    setter_name: string | null
   }>()
 
-  // Only fire if trap exists AND setter has left this city
-  if (!trapRow || trapRow.setter_current_city === cityId) return
+  // Fire for anyone except the setter themselves
+  if (!trapRow || trapRow.setter_player_id === npcId) return
 
   const params = JSON.parse(trapRow.consequence_params) as { seasons?: number; amount?: number; turns?: number }
   const setterName = trapRow.setter_name?.split('@')[0] ?? 'Someone'

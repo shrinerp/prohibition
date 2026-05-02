@@ -3,6 +3,7 @@ import {
   NPC_PRIORITY,
   applyWealthDecay,
   selectNpcAction,
+  computeNpcTakeoverCost,
   type NpcState,
   type NpcAction
 } from '../src/game/npc'
@@ -74,5 +75,32 @@ describe('selectNpcAction()', () => {
     const npc: NpcState = { ...baseNpc, isInJail: true }
     const action = selectNpcAction(npc, true, true, true)
     expect(action).toBe('sell')
+  })
+})
+
+describe('computeNpcTakeoverCost()', () => {
+  it('neutral city at tier 1 costs base claim price', () => {
+    // medium = $1000, tier 1 = no upgrade premium
+    expect(computeNpcTakeoverCost(0, 'medium', 1, true)).toBe(1000)
+  })
+
+  it('owned city at tier 1 costs 2× the stored cost', () => {
+    // stored claim_cost = 1000 → 2 × 1000 = $2000
+    expect(computeNpcTakeoverCost(1000, 'medium', 1, false)).toBe(2000)
+  })
+
+  it('owned city at tier 3 adds upgrade premium for tiers 2 and 3', () => {
+    // stored = 1000, 2× = 2000; tier2 cost=500, tier3 cost=1000 → total 3500
+    expect(computeNpcTakeoverCost(1000, 'medium', 3, false)).toBe(3500)
+  })
+
+  it('uses BASE_CLAIM when claim_cost is 0 (neutral city)', () => {
+    // small BASE_CLAIM = 500, neutral → 500
+    expect(computeNpcTakeoverCost(0, 'small', 1, true)).toBe(500)
+  })
+
+  it('owned city uses stored claim_cost (ignores BASE_CLAIM)', () => {
+    // claim_cost = 1500, neutral=false → 2 × 1500 = 3000
+    expect(computeNpcTakeoverCost(1500, 'large', 1, false)).toBe(3000)
   })
 })
