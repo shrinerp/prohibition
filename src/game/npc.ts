@@ -285,7 +285,17 @@ export async function runNpcTurn(
   // Step 2: Sell any cargo carried in vehicle
   await sellVehicleCargo(db, gameId, npcId, season, displayName)
 
-  // Step 3: Roll dice and move
+  // Step 3: Claim the city the NPC is currently in (arrived last turn).
+  // Must happen BEFORE movement so NPCs experience the same two-turn sequence
+  // as human players: arrive one turn, claim the next.
+  const vehicleForClaim = await db.prepare(
+    `SELECT id, city_id, vehicle_type FROM vehicles WHERE player_id = ? AND game_id = ? ORDER BY id LIMIT 1`
+  ).bind(npcId, gameId).first<{ id: number; city_id: number; vehicle_type: string }>()
+  if (vehicleForClaim) {
+    await tryClaimCity(db, gameId, npcId, archetype, vehicleForClaim.city_id, displayName)
+  }
+
+  // Step 4: Roll dice and move
   const vehicle = await db.prepare(
     `SELECT id, city_id, vehicle_type FROM vehicles WHERE player_id = ? AND game_id = ? ORDER BY id LIMIT 1`
   ).bind(npcId, gameId).first<{ id: number; city_id: number; vehicle_type: string }>()
@@ -364,11 +374,8 @@ export async function runNpcTurn(
     await resolveNpcTrap(db, gameId, npcId, destinationCityId, season, displayName)
   }
 
-  // Step 4: Police encounter at destination (auto-resolved)
+  // Step 5: Police encounter at destination (auto-resolved)
   await runNpcPoliceCheck(db, gameId, npcId, vehicle.id, destinationCityId, season, displayName)
-
-  // Step 5: Claim the city if it's neutral (all) or competitor-owned (expander)
-  await tryClaimCity(db, gameId, npcId, archetype, destinationCityId, displayName)
 
   // Step 6: Set a trap (syndicate archetype, random chance)
   if (archetype === 'npc_syndicate') {
