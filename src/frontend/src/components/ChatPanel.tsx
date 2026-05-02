@@ -33,6 +33,24 @@ function relativeTime(iso: string): string {
   return `${Math.floor(diff / 86400)}d`
 }
 
+type MessageFilter = 'all' | 'chat' | 'trade' | 'cities' | 'police'
+
+// Action-emoji prefixes that indicate NPC/system info messages even when is_system = 0
+const ACTION_EMOJI_RE = /^(📦|🚗|🗺️|🏴|⚔️|⚗️|🔧|💣|💸|🎵|📰|🔥|🕵️|🪤|💰|🥃 .*stole|🛢️)/u
+
+function classifyMessage(msg: ChatMessage): 'chat' | 'trade' | 'cities' | 'police' | 'other' {
+  const m = msg.message
+  // Typed player chat + drink sends: not a system message AND (no action-emoji prefix OR drink message)
+  if (!msg.isSystem && (!ACTION_EMOJI_RE.test(m) || /slid .* cheers/i.test(m))) return 'chat'
+  // Police: fed stops, jail, accusations, informant actions
+  if (/^🕵️/.test(m) || /paid a federal fine|taken in by federal agents|exposed an informant|accusation was brought|recruited by the feds/i.test(m)) return 'police'
+  // Trade: buy/sell/economic events
+  if (/^(📦|💸|🎵|📰|⚗️|🔧)/.test(m) || /^🚗 .*sold/i.test(m) || /sold .*\$|transferred \$|sold distillery|sold transported|upgraded.*still|upgraded a still/i.test(m)) return 'trade'
+  // Cities: city movement and actions
+  if (/^(🗺️|🏴|⚔️)/.test(m) || /claimed|stashed something|retrieved|triggered a trap|found a note/i.test(m)) return 'cities'
+  return 'other'
+}
+
 export default function ChatPanel({ gameId, myTurnOrder, players, playerColors, isMyTurn, inventoryItems }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [since, setSince] = useState(0)
@@ -44,6 +62,7 @@ export default function ChatPanel({ gameId, myTurnOrder, players, playerColors, 
   const [drinkType, setDrinkType] = useState('')
   const [drinkRecipient, setDrinkRecipient] = useState<number | ''>('')
   const [drinkSending, setDrinkSending] = useState(false)
+  const [filter, setFilter] = useState<MessageFilter>('all')
 
   const listRef = useRef<HTMLDivElement>(null)
   const sinceRef = useRef(0)
@@ -139,12 +158,43 @@ export default function ChatPanel({ gameId, myTurnOrder, players, playerColors, 
     return playerColors[turnOrder % playerColors.length] ?? '#888'
   }
 
+  const FILTERS: { key: MessageFilter; label: string; title: string }[] = [
+    { key: 'all',    label: 'All',    title: 'Show all messages' },
+    { key: 'chat',   label: 'Chat',   title: 'Player messages only' },
+    { key: 'trade',  label: 'Trade',  title: 'Buy & sell messages' },
+    { key: 'cities', label: 'Cities', title: 'City movement & actions' },
+    { key: 'police', label: 'Police', title: 'Police stops & federal encounters' },
+  ]
+
+  const visibleMessages = filter === 'all'
+    ? messages
+    : messages.filter(msg => classifyMessage(msg) === filter)
+
+  const filterBar = (
+    <div className="flex gap-1 px-3 py-1.5 border-b border-stone-700/60 flex-shrink-0">
+      {FILTERS.map(f => (
+        <button
+          key={f.key}
+          onClick={() => setFilter(f.key)}
+          title={f.title}
+          className={`px-2 py-0.5 rounded text-xs font-semibold transition ${
+            filter === f.key
+              ? 'bg-amber-700 text-amber-100'
+              : 'bg-stone-800 text-stone-400 hover:text-stone-200 hover:bg-stone-700'
+          }`}
+        >
+          {f.label}
+        </button>
+      ))}
+    </div>
+  )
+
   const messageList = (
     <div ref={listRef} className="flex-1 overflow-y-auto p-3 space-y-2 min-h-0">
-      {messages.length === 0 ? (
-        <p className="text-stone-600 text-xs italic">No messages yet</p>
+      {visibleMessages.length === 0 ? (
+        <p className="text-stone-600 text-xs italic">{messages.length === 0 ? 'No messages yet' : 'No messages in this category'}</p>
       ) : (
-        messages.map(msg => (
+        visibleMessages.map(msg => (
           <div key={msg.id} className="flex gap-2 text-xs">
             {msg.isSystem ? (
               <div className="flex-1 pl-3 border-l-2 border-amber-800 min-w-0">
@@ -290,6 +340,7 @@ export default function ChatPanel({ gameId, myTurnOrder, players, playerColors, 
               </button>
             </div>
           </div>
+          {filterBar}
           {messageList}
           {inputBar}
         </div>
@@ -317,6 +368,7 @@ export default function ChatPanel({ gameId, myTurnOrder, players, playerColors, 
               </button>
             </div>
           </div>
+          {filterBar}
           {messageList}
           {inputBar}
         </div>

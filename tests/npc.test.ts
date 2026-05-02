@@ -79,6 +79,12 @@ describe('selectNpcAction()', () => {
   })
 })
 
+// The claim-timing contract: NPC claims the city it is CURRENTLY IN at the
+// start of its turn, not the city it is about to move to. This is validated
+// via the exported turn-flow ordering in integration, but the key invariant is:
+// tryClaimCity receives vehicle.city_id (current) not destinationCityId (future).
+// The unit test below verifies the selectNpcTarget helper used in that flow.
+
 describe('selectNpcTarget()', () => {
   const candidates = [
     { cityId: 1, cost: 3 },
