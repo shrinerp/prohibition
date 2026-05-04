@@ -9,6 +9,8 @@ import StillDialog    from '../components/StillDialog'
 import PoliceDialog   from '../components/PoliceDialog'
 import FedStopDialog  from '../components/FedStopDialog'
 import InformantNetworkDialog from '../components/InformantNetworkDialog'
+import FedsDialog from '../components/FedsDialog'
+import FedsIntroDialog from '../components/FedsIntroDialog'
 import BribeDialog      from '../components/BribeDialog'
 import SeasonTimeline   from '../components/SeasonTimeline'
 import JailOverlay      from '../components/JailOverlay'
@@ -117,7 +119,13 @@ interface FullState {
     claimCostMultiplier: number
     role: string
     informants: Array<{ id: number; cityId: number | null; cityName: string | null }>
-    pendingSightings: Array<{ playerName: string; cityId: number; cityName: string; season: number }>
+    pendingSightings: Array<{ playerId: number; playerName: string; cityId: number; cityName: string; season: number; paid?: boolean }>
+    sellUsed: boolean
+    maxOutUsed: boolean
+    unitsStolen: number
+    unitsStolenFrom: number
+    heatLedger: Array<{ type: string; description: string; heatDelta: number; season: number }>
+    visibleEnemyVehicles: Array<{ vehicleId: number; playerId: number; turnOrder: number; cityId: number }>
   }
   vehiclePrices: Record<string, number>
   players: PlayerInfo[]
@@ -131,17 +139,29 @@ interface MapCity {
   id: number; name: string; lat: number; lon: number
   owner_player_id: number | null; claim_cost: number
   primary_alcohol: string; population_tier: string
+  is_coastal?: number | null
   bribe_player_id?: number | null; bribe_expires_season?: number | null
+  still_tier?: number
 }
 
 const BASE_CLAIM_COST: Record<string, number> = { small: 500, medium: 1000, large: 1500, major: 2500 }
+const STILL_UPGRADE_COST: Record<number, number> = { 1: 200, 2: 500, 3: 1000, 4: 2000, 5: 4000 }
+function stillUpgradeValue(tier: number): number {
+  let v = 0; for (let t = 2; t <= tier; t++) v += STILL_UPGRADE_COST[t] ?? 0; return v
+}
+function cityTakeoverCost(city: MapCity, claimCostMultiplier = 1): number {
+  const base = BASE_CLAIM_COST[city.population_tier] ?? 500
+  const stillVal = stillUpgradeValue(city.still_tier ?? 1)
+  if (city.owner_player_id == null) return Math.floor((base + stillVal) * claimCostMultiplier)
+  return (city.claim_cost > 0 ? city.claim_cost : base) * 2 + stillVal
+}
 
 const CHARACTER_DISPLAY: Record<string, { name: string; perk: string; drawback: string }> = {
   priest_nun:   { name: 'The Priest / Nun',             perk: '-25% Heat generation · 2× heat decay',         drawback: '-20% Cargo capacity' },
   hillbilly:    { name: 'The Hillbilly',                 perk: '-20% Distillery upgrade costs',                drawback: '-10% Movement roll' },
   gangster:     { name: 'The Gangster',                  perk: 'Claim cities 25% cheaper',                     drawback: '+20% Heat generation' },
   vixen:        { name: 'The Vixen',                     perk: 'Bribes last 6 seasons',                        drawback: '-10% Production volume' },
-  pharmacist:   { name: 'The Pharmacist',                perk: 'Whiskey sells at +50% (medicinal prescription)', drawback: 'Takeover costs +25%' },
+  pharmacist:   { name: 'The Pharmacist',                perk: 'Whiskey sells at +33% (medicinal prescription)', drawback: 'Takeover costs +25%' },
   jazz_singer:  { name: 'The Jazz Singer',               perk: 'Passive income in large/major cities',         drawback: '+15% Heat generation' },
   bootlegger:   { name: 'The Bootlegger (Clyde)',        perk: 'All dice rolls +2 bonus',                      drawback: '+20% Heat generation' },
   socialite:    { name: 'The Socialite (Eleanor)',       perk: '+25% sell price everywhere',                   drawback: '-20% Alcohol production' },
@@ -181,12 +201,13 @@ const CHARACTER_IMAGES: Record<string, string> = {
 }
 
 function CharacterCarousel({
-  characters, myClass, takenClasses, onSelect
+  characters, myClass, takenClasses, onSelect, onHelp
 }: {
   characters: Array<{ id: string; name: string; perk: string; drawback: string }>
   myClass: string
   takenClasses: Set<string>
   onSelect: (id: string) => void
+  onHelp?: () => void
 }) {
   const initialIndex = Math.max(0, characters.findIndex(c => c.id === myClass))
   const [idx, setIdx] = React.useState(initialIndex)
@@ -200,7 +221,14 @@ function CharacterCarousel({
 
   return (
     <div className="flex flex-col items-center gap-3 w-full">
-      <p className="text-stone-400 text-xs uppercase tracking-wider">Choose Your Character</p>
+      <div className="flex items-center justify-between w-full px-1">
+        <p className="text-stone-400 text-xs uppercase tracking-wider">Choose Your Character</p>
+        {onHelp && (
+          <button onClick={onHelp} className="text-xs text-stone-500 hover:text-amber-400 underline underline-offset-2 transition cursor-pointer">
+            Why does this matter?
+          </button>
+        )}
+      </div>
 
       {/* Main card with flanking arrows */}
       <div className="flex items-center gap-3 w-full">
@@ -349,21 +377,30 @@ export default function GamePage() {
   const [policeEncounter, setPoliceEncounter] = useState<{ bribeCost: number; populationTier: string; heat: number } | null>(null)
   const [fedEncounter, setFedEncounter] = useState<{ fineCost: number; jailSeasons: number; cargoUnits: number } | null>(null)
   const [informantNetworkOpen, setInformantNetworkOpen] = useState(false)
+  const [fedsOpen, setFedsOpen] = useState(false)
+  const [fedsIntroSeen, setFedsIntroSeen] = useState(() => localStorage.getItem(`feds_intro_seen_${gameId}`) === '1')
+  const [accusationResult, setAccusationResult] = useState<{ success: boolean; targetName: string } | null>(null)
+  const [accusationFiledThisTurn, setAccusationFiledThisTurn] = useState(false)
   const [leftOpen,  setLeftOpen]  = useState(true)
   const [rightOpen, setRightOpen] = useState(true)
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteStatus, setInviteStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle')
   const [nameDialogOpen, setNameDialogOpen] = useState(false)
+  const [showCharHelp, setShowCharHelp] = useState(false)
   const [starting, setStarting] = useState(false)
   const [celebrationQueue, setCelebrationQueue] = useState<Celebration[]>([])
-  const [distilleriesOpen, setDistilleriesOpen] = useState(false)
   const [vehiclesOpen, setVehiclesOpen] = useState(false)
   const [netWorthOpen, setNetWorthOpen] = useState(false)
   const [ledgerOpen, setLedgerOpen] = useState(false)
   const [turnPending, setTurnPending] = useState(false)
+  const [turnError,   setTurnError]   = useState<string | null>(null)
+  const [cashAdjust, setCashAdjust] = useState(0)
   const [cityMapOpen, setCityMapOpen] = useState(false)
   const [showYourTurnDialog, setShowYourTurnDialog] = useState(false)
-  const prevIsMyTurnRef = useRef<number | null>(null)
+  const prevIsMyTurnRef    = useRef<number | null>(null)
+  const prevIsMyTurnBell   = useRef<boolean | null>(null)
+  const audioRef = useRef<HTMLAudioElement>(null)
+  const [isMuted, setIsMuted] = useState(() => localStorage.getItem('prohibition_music_muted') === 'true')
   const [missionsOpen, setMissionsOpen] = useState(false)
   const [drawnCardId,  setDrawnCardId]  = useState<number | null>(null)
   const missionIdsBeforeDrawRef = useRef<Set<number> | null>(null)
@@ -372,6 +409,7 @@ export default function GamePage() {
   const [showNewsPrompt, setShowNewsPrompt] = useState(false)
   const [newsDeclined, setNewsDeclined] = useState(false)
   const [mapMode, setMapMode] = useState<'normal' | 'simple' | 'info'>('normal')
+  const [showCoastal, setShowCoastal] = useState(false)
   const [infoCityId, setInfoCityId] = useState<number | null>(null)
   const [characterPopup, setCharacterPopup] = useState<{ name: string; perk: string; drawback: string } | null>(null)
   const [boughtThisTurn, setBoughtThisTurn] = useState<Map<number, number>>(new Map())
@@ -418,6 +456,8 @@ export default function GamePage() {
           }
           return stateData.data
         })
+        setSoldThisTurn(stateData.data?.player?.sellUsed ?? false)
+        setMaxedThisTurn(stateData.data?.player?.maxOutUsed ?? false)
       }
       if (mapData.success) {
         setMapCities(mapData.data.cities ?? [])
@@ -445,6 +485,24 @@ export default function GamePage() {
     return () => clearInterval(interval)
   }, [fetchAll])
 
+  // All sounds — unlocked on first user click
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio) return
+    audio.volume = 0.09
+    audio.muted = isMuted
+    const unlock = () => { audio.play().catch(() => {}) }
+    document.addEventListener('click', unlock, { once: true })
+    return () => document.removeEventListener('click', unlock)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!audioRef.current) return
+    audioRef.current.muted = isMuted
+    localStorage.setItem('prohibition_music_muted', String(isMuted))
+    if (!isMuted) audioRef.current.play().catch(() => {})
+  }, [isMuted])
+
   // Heartbeat — tell the server this player has the game open, every 60s while tab is visible
   useEffect(() => {
     if (!gameId) return
@@ -463,6 +521,28 @@ export default function GamePage() {
   }, [gameId])
 
   usePushSubscription()
+
+  // ── Debug: Ctrl+Shift+F forces a fed stop on the current player ──────────
+  // ── Debug: Ctrl+Shift+V logs all vehicle positions ───────────────────────
+  useEffect(() => {
+    const handler = async (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.shiftKey && e.key === 'F' && gameId) {
+        await fetch(`/api/games/${gameId}/dbg/fed`, { method: 'POST' })
+        // Submit a no-op to flush the injected encounter back to the client
+        submitTurn([{ type: 'stay' }], { transition: false })
+      }
+      if (e.ctrlKey && e.shiftKey && e.key === 'V' && gameId) {
+        const res = await fetch(`/api/games/${gameId}/dbg/vehicles`)
+        const data = await res.json()
+        console.log('── Vehicles ──')
+        console.table(data.vehicles)
+        console.log('── Informants ──')
+        console.table(data.informants)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [gameId, fetchAll])
 
   async function dismissDrinks() {
     await fetch(`/api/games/${gameId}/dismiss-drinks`, { method: 'POST' })
@@ -593,6 +673,19 @@ export default function GamePage() {
   // Show "Your Turn" only when currentPlayerIndex genuinely transitions FROM another
   // player's index TO ours — not when it stays on ours (NPC auto-skip loop) and not
   // due to turnPending toggling serverIsMyTurn back and forth.
+  // Bell: fires only when serverIsMyTurn transitions false→true (real turn handoff).
+  // Uses serverIsMyTurn not isMyTurn so turnPending toggling mid-turn doesn't trigger it.
+  useEffect(() => {
+    const prev = prevIsMyTurnBell.current
+    prevIsMyTurnBell.current = serverIsMyTurn
+    if (prev === null) return          // initial load — skip
+    if (!prev && serverIsMyTurn) {
+      const bell = new Audio('/bell-ding.mp3')
+      bell.volume = 0.8
+      bell.play().catch(() => {})
+    }
+  }, [serverIsMyTurn])
+
   useEffect(() => {
     const current = game?.currentPlayerIndex ?? null
     const myOrder = player?.turnOrder ?? null
@@ -603,6 +696,7 @@ export default function GamePage() {
     if (prev === null || current === null || myOrder === null) return
     if (current === myOrder && prev !== myOrder) {
       setShowYourTurnDialog(true)
+      setAccusationFiledThisTurn(false)
       const vehicleCity = player?.vehicles?.[0]?.cityId
       if (vehicleCity != null) setViewCityId(vehicleCity)
       const ownedIds = [
@@ -665,14 +759,11 @@ export default function GamePage() {
       .sort((a, b) => b.units - a.units)
   }, [player?.vehicles])
 
-  const homeCity = player?.homeCityId != null
-    ? mapCities.find(c => c.id === player.homeCityId) ?? null
-    : null
 
   // Live net worth = cash + cargo (at avg market price) + vehicles + distilleries + owned cities
   const liveNetWorth = React.useMemo(() => {
     if (!player) return 0
-    const DIST_VAL: Record<number, number> = { 1: 50, 2: 175, 3: 425, 4: 900, 5: 1900 }
+    const DIST_VAL: Record<number, number> = { 1: 150, 2: 525, 3: 1275, 4: 2775, 5: 5775 }
     const BASE_PRICES: Record<string, number> = {
       beer: 15, gin: 25, rum: 20, whiskey: 30, moonshine: 20,
       vodka: 22, bourbon: 28, rye: 26, scotch: 35, tequila: 24,
@@ -706,8 +797,6 @@ export default function GamePage() {
     const coastal = isCoastal ? (COASTAL_MULT[charClass] ?? 1.0) : 1.0
     return Math.floor(base * prod * coastal)
   }
-  const homeDistillery = (player?.distilleries ?? []).find(d => d.cityId === player?.homeCityId) ?? null
-  const homeProduction = homeDistillery ? stillOutput(homeDistillery.tier, homeDistillery.isCoastal) : 0
 
   // City stockpile: city_id → total units available
   const cityStockpileTotal = React.useMemo(() => {
@@ -817,8 +906,9 @@ export default function GamePage() {
     lat:        c.lat,
     lon:        c.lon,
     ownerColor: c.owner_player_id != null
-      ? PLAYER_COLORS[(fullState?.players ?? []).findIndex(p => p.id === c.owner_player_id) % PLAYER_COLORS.length]
-      : undefined
+      ? PLAYER_COLORS[((fullState?.players ?? []).find(p => p.id === c.owner_player_id)?.turnOrder ?? 0) % PLAYER_COLORS.length]
+      : undefined,
+    isCoastal:  c.is_coastal === 1,
   }))
 
   const svgRoads: Road[] = mapRoads.map(r => ({
@@ -827,22 +917,23 @@ export default function GamePage() {
   }))
 
   // Build tokens: current player's vehicles + other human players at their currentCityId
+  // Snitches can only see their own vehicles — not other players' positions
   const myPlayerId = player?.id
-  const myIndex = (fullState?.players ?? []).findIndex(p => p.id === myPlayerId)
+  const myTurnOrder = player?.turnOrder ?? 0
   const svgTokens: PlayerToken[] = [
-    // Other human players — one token per player at their currentCityId (exclude self + NPCs)
-    ...(fullState?.players ?? [])
-      .filter(p => p.currentCityId != null && p.id !== myPlayerId && !p.isNpc)
-      .map(p => {
-        const i = (fullState?.players ?? []).findIndex(fp => fp.id === p.id)
-        return { playerId: p.id, cityId: p.currentCityId!, color: PLAYER_COLORS[i % PLAYER_COLORS.length], isMe: false }
-      }),
-    // My vehicles — one token per vehicle (each has its own position)
+    // Current player's own vehicles
     ...(player?.vehicles ?? []).map(v => ({
       playerId: myPlayerId!,
       cityId: v.cityId,
-      color: PLAYER_COLORS[myIndex >= 0 ? myIndex % PLAYER_COLORS.length : 0],
+      color: PLAYER_COLORS[myTurnOrder % PLAYER_COLORS.length],
       isMe: true,
+    })),
+    // Enemy vehicles visible from cities where player has own vehicle or informant
+    ...(player?.visibleEnemyVehicles ?? []).map(ev => ({
+      playerId: ev.playerId,
+      cityId: ev.cityId,
+      color: PLAYER_COLORS[ev.turnOrder % PLAYER_COLORS.length],
+      isMe: false,
     })),
   ]
 
@@ -911,12 +1002,17 @@ export default function GamePage() {
     setBribeOpen(false)
     setVehicleOpen(false)
     setCityDetailOpen(false)
-    setDistilleriesOpen(false)
     setVehiclesOpen(false)
     setNetWorthOpen(false)
+    setInformantNetworkOpen(false)
+    setFedsOpen(false)
   }
 
   async function submitTurn(actions: unknown[], { refresh = true, transition = false } = {}) {
+    const TERMINAL = new Set(['move', 'stay', 'skip', 'police_resolve', 'fed_stop_respond'])
+    const hasTerminal = (actions as Array<{ type?: string }>).some(a => a?.type && TERMINAL.has(a.type))
+    if (hasTerminal) setAccusationFiledThisTurn(false)
+
     if (refresh) {
       setTurnPending(true)
       if (transition) {
@@ -932,6 +1028,7 @@ export default function GamePage() {
       await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
     }
     try {
+      setTurnError(null)
       const res  = await fetch(`/api/games/${gameId}/turn`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -939,7 +1036,10 @@ export default function GamePage() {
       })
       if (!res.ok) {
         const text = await res.text()
-        throw new Error(`Turn failed (${res.status}): ${text}`)
+        let msg = `Turn failed (${res.status})`
+        try { const j = JSON.parse(text); if (j.message) msg = j.message } catch {}
+        setTurnError(msg)
+        return
       }
       const data = await res.json()
       if (data.fedEncounter) {
@@ -947,6 +1047,10 @@ export default function GamePage() {
       }
       if (data.policeEncounter) {
         setPoliceEncounter(data.policeEncounter)
+      }
+      if (data.accusationResult) {
+        setAccusationResult(data.accusationResult)
+        setAccusationFiledThisTurn(true)
       }
       if (data.celebrations?.length) {
         setCelebrationQueue(prev => [...prev, ...data.celebrations])
@@ -967,7 +1071,8 @@ export default function GamePage() {
           police_encounter: !!data.policeEncounter,
         })
       }
-      if (refresh) { setDiceRoll(null); setBoughtThisTurn(new Map()); setSoldThisTurn(false); setMaxedThisTurn(false); await fetchAll() }
+      if (data.gameEnded) { nav(`/games/${gameId}/end`); return }
+      if (refresh) { setDiceRoll(null); setBoughtThisTurn(new Map()); setSoldThisTurn(false); setMaxedThisTurn(false); await fetchAll(); setCashAdjust(0) }
       else resetMovement()
     } finally {
       if (refresh) {
@@ -1123,230 +1228,225 @@ export default function GamePage() {
           </div>
         </div>
 
-        {/* Two-column grid — stacks on mobile */}
-        <div className="max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+        {/* Single-column layout */}
+        <div className="max-w-4xl mx-auto space-y-4">
 
-          {/* Column 1 — Game setup (visually second) */}
-          <div className="space-y-3 md:order-2">
-
-            {/* Game identity card: invite code + game name + email invite */}
-            <div className="bg-stone-900 border border-stone-700 rounded-xl overflow-hidden">
-              {/* Invite code */}
-              <div className="px-4 py-3 text-center border-b border-stone-800">
-                <p className="text-xs text-stone-500 uppercase tracking-widest font-bold mb-1">Invite Code</p>
-                <p className="text-2xl font-mono font-bold text-amber-300">{game.inviteCode}</p>
-              </div>
-
-              {/* Game name */}
-              {game.isHost ? (
-                <div className="px-4 py-3 border-b border-stone-800">
-                  <NameInput
-                    currentName={game.gameName ?? ''}
-                    placeholder="Name your game…"
-                    onSave={saveGameName}
-                    label="Game Name"
-                  />
-                </div>
-              ) : game.gameName ? (
-                <div className="px-4 py-3 text-center border-b border-stone-800">
-                  <p className="text-xs text-stone-500 uppercase tracking-widest font-bold mb-0.5">Game</p>
-                  <p className="text-amber-300 font-bold">{game.gameName}</p>
-                </div>
-              ) : null}
-
-              {/* Email invite — host only */}
-              {game.isHost && (
-                <div className="px-4 py-3">
-                  <p className="text-xs text-stone-600 mb-2">Invite a friend by email</p>
-                  <form onSubmit={sendInvite} className="flex gap-2">
-                    <input
-                      type="email"
-                      placeholder="friend@email.com"
-                      value={inviteEmail}
-                      onChange={e => setInviteEmail(e.target.value)}
-                      disabled={inviteStatus === 'sending'}
-                      className="flex-1 px-3 py-2 bg-stone-800 rounded border border-stone-700 focus:outline-none focus:border-amber-500 text-sm placeholder-stone-600 min-w-0"
-                    />
-                    <button
-                      type="submit"
-                      disabled={!inviteEmail.trim() || inviteStatus === 'sending'}
-                      className="px-4 py-2 border border-stone-600 hover:border-amber-600 hover:text-amber-400 text-stone-400 font-bold rounded text-xs uppercase tracking-wide transition cursor-pointer disabled:opacity-40"
-                    >
-                      {inviteStatus === 'sending' ? '…' : inviteStatus === 'sent' ? 'Sent' : 'Send'}
-                    </button>
-                  </form>
-                  {inviteStatus === 'sent' && <p className="text-green-400 text-xs mt-1.5">Invite sent!</p>}
-                  {inviteStatus === 'error' && <p className="text-red-400 text-xs mt-1.5">Failed to send invite.</p>}
-                </div>
-              )}
+          {/* Game identity card — invite code + game name + email invite */}
+          <div className="bg-stone-900 border border-stone-700 rounded-xl overflow-hidden">
+            <div className="px-4 py-3 text-center border-b border-stone-800">
+              <p className="text-xs text-stone-500 uppercase tracking-widest font-bold mb-1">Invite Code</p>
+              <p className="text-2xl font-mono font-bold text-amber-300">{game.inviteCode}</p>
             </div>
 
-            {/* Settings + Players card */}
-            <div className="bg-stone-900 border border-stone-700 rounded-xl overflow-hidden">
-              {/* Max players */}
-              <div className="px-4 py-3 border-b border-stone-800">
-                <div className="flex items-center justify-between mb-2">
-                  <p className="text-xs text-stone-500 uppercase tracking-widest font-bold">Max Players</p>
-                  {!game.isHost && <span className="text-sm font-bold text-amber-300">{game.maxPlayers}</span>}
-                </div>
-                {game.isHost && (
-                  <>
-                    <div className="flex gap-1">
-                      {[2, 3, 4, 5].map(n => (
-                        <button
-                          key={n}
-                          onClick={async () => {
-                            await fetch(`/api/games/${gameId}/max-players`, {
-                              method: 'PATCH',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ maxPlayers: n }),
-                            })
-                            fetchAll()
-                          }}
-                          className={`flex-1 py-1 text-xs font-bold rounded transition border cursor-pointer ${
-                            game.maxPlayers === n
-                              ? 'bg-amber-600 border-amber-500 text-stone-900'
-                              : 'bg-stone-800 border-stone-600 text-stone-500 hover:border-amber-700 hover:text-amber-400'
-                          }`}
-                        >
-                          {n}
-                        </button>
-                      ))}
-                    </div>
-                    <p className="text-stone-600 text-xs mt-1.5">Empty slots filled with NPC opponents.</p>
-                  </>
-                )}
-              </div>
-
-              {/* Visibility toggle — host only */}
-              {game.isHost && (
-                <div className="px-4 py-3 border-b border-stone-800">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-xs text-stone-500 uppercase tracking-widest font-bold">Visibility</p>
-                      <p className="text-xs text-stone-600 mt-0.5">
-                        {game.isPublic ? 'Anyone can find and join this game' : 'Only people with the invite code can join'}
-                      </p>
-                    </div>
-                    <button
-                      onClick={async () => {
-                        await fetch(`/api/games/${gameId}/visibility`, {
-                          method: 'PATCH',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ isPublic: !game.isPublic }),
-                        })
-                        fetchAll()
-                      }}
-                      className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${game.isPublic ? 'bg-amber-500' : 'bg-stone-700'}`}
-                    >
-                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${game.isPublic ? 'translate-x-5' : 'translate-x-0'}`} />
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Players readiness */}
-              <div className="px-4 pt-3 pb-1">
-                <p className="text-xs text-stone-500 uppercase tracking-widest font-bold mb-2">Players</p>
-              </div>
-              {humanPlayers.map((p, i) => {
-                const selected = p.characterClass && p.characterClass !== 'unselected'
-                const isMe = p.id === player?.id
-                return (
-                  <div key={p.id} className="px-4 py-3 border-b border-stone-800 last:border-0 flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: PLAYER_COLORS[i % PLAYER_COLORS.length] }} />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <p className={`text-sm font-semibold truncate ${isMe ? 'text-amber-400' : 'text-stone-300'}`}>
-                          {p.name}
-                        </p>
-                        {isMe && (
-                          <button
-                            onClick={() => setNameDialogOpen(true)}
-                            className="text-xs text-stone-500 hover:text-amber-400 underline underline-offset-2 flex-shrink-0 transition cursor-pointer"
-                          >
-                            change
-                          </button>
-                        )}
-                      </div>
-                      <p className={`text-xs truncate ${selected ? 'text-green-400' : 'text-stone-500 italic'}`}>
-                        {selected ? p.characterClass!.replace(/_/g, ' ') : 'Choosing…'}
-                      </p>
-                    </div>
-                    <span className={`text-base flex-shrink-0 ${selected ? 'text-green-400' : 'text-stone-600'}`}>
-                      {selected ? '✓' : '○'}
-                    </span>
-                    {game.isHost && !isMe && (
-                      <button
-                        onClick={() => bootPlayer(p.id)}
-                        className="text-stone-700 hover:text-red-400 text-base leading-none flex-shrink-0 transition cursor-pointer ml-1"
-                        title={`Boot ${p.name}`}
-                        aria-label={`Boot ${p.name}`}
-                      >×</button>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-
-            {/* Start / ready */}
-            {!iAmReady && (
-              <p className="text-amber-500 text-xs text-center">Select your character on the right to continue →</p>
-            )}
             {game.isHost ? (
-              <button
-                disabled={!allReady || starting}
-                onClick={startGame}
-                className="w-full py-2.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed text-stone-900 font-bold rounded uppercase tracking-wide transition text-sm cursor-pointer"
-                title={!allReady ? 'Waiting for all players to select a character' : ''}
-              >
-                {starting ? 'Starting…' : allReady ? 'Start Game' : 'Waiting for players…'}
-              </button>
-            ) : (
-              <p className="text-stone-500 italic text-sm text-center">
-                {iAmReady ? 'Ready — waiting for host to start…' : 'Select a character to get ready'}
-              </p>
+              <div className="px-4 py-3 border-b border-stone-800">
+                <NameInput
+                  currentName={game.gameName ?? ''}
+                  placeholder="Name your game…"
+                  onSave={saveGameName}
+                  label="Game Name"
+                />
+              </div>
+            ) : game.gameName ? (
+              <div className="px-4 py-3 text-center border-b border-stone-800">
+                <p className="text-xs text-stone-500 uppercase tracking-widest font-bold mb-0.5">Game</p>
+                <p className="text-amber-300 font-bold">{game.gameName}</p>
+              </div>
+            ) : null}
+
+            {game.isHost && (
+              <div className="px-4 py-3">
+                <p className="text-xs text-stone-600 mb-2">Invite a friend by email</p>
+                <form onSubmit={sendInvite} className="flex gap-2">
+                  <input
+                    type="email"
+                    placeholder="friend@email.com"
+                    value={inviteEmail}
+                    onChange={e => setInviteEmail(e.target.value)}
+                    disabled={inviteStatus === 'sending'}
+                    className="flex-1 px-3 py-2 bg-stone-800 rounded border border-stone-700 focus:outline-none focus:border-amber-500 text-sm placeholder-stone-600 min-w-0"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!inviteEmail.trim() || inviteStatus === 'sending'}
+                    className="px-4 py-2 border border-stone-600 hover:border-amber-600 hover:text-amber-400 text-stone-400 font-bold rounded text-xs uppercase tracking-wide transition cursor-pointer disabled:opacity-40"
+                  >
+                    {inviteStatus === 'sending' ? '…' : inviteStatus === 'sent' ? 'Sent' : 'Send'}
+                  </button>
+                </form>
+                {inviteStatus === 'sent' && <p className="text-green-400 text-xs mt-1.5">Invite sent!</p>}
+                {inviteStatus === 'error' && <p className="text-red-400 text-xs mt-1.5">Failed to send invite.</p>}
+              </div>
             )}
-            <button
-              onClick={leaveGame}
-              className="w-full py-1.5 text-stone-600 hover:text-red-400 text-xs transition cursor-pointer"
-            >
-              {game.isHost ? 'Cancel Game' : 'Leave Lobby'}
-            </button>
           </div>
 
-          {/* Column 2 — Character selection (visually first) */}
-          <div className="space-y-3 md:order-1">
-
-            {/* Character carousel */}
-            <CharacterCarousel
-              characters={CHARACTERS}
-              myClass={myClass}
-              takenClasses={takenClasses}
-              onSelect={selectCharacter}
-            />
-
-            {/* Why character choice matters */}
-            <div className="bg-stone-900 border border-stone-700 rounded-xl overflow-hidden">
-              <div className="px-4 py-3 border-b border-stone-800">
-                <p className="text-xs text-stone-500 uppercase tracking-widest font-bold">Why Your Character Matters</p>
+          {/* Game settings card — max players + visibility */}
+          <div className="bg-stone-900 border border-stone-700 rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-stone-800">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs text-stone-500 uppercase tracking-widest font-bold">Max Players</p>
+                {!game.isHost && <span className="text-sm font-bold text-amber-300">{game.maxPlayers}</span>}
               </div>
-              <div className="px-4 py-3 space-y-2">
+              {game.isHost && (
+                <>
+                  <div className="flex gap-1">
+                    {[2, 3, 4, 5].map(n => (
+                      <button
+                        key={n}
+                        onClick={async () => {
+                          await fetch(`/api/games/${gameId}/max-players`, {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ maxPlayers: n }),
+                          })
+                          fetchAll()
+                        }}
+                        className={`flex-1 py-1 text-xs font-bold rounded transition border cursor-pointer ${
+                          game.maxPlayers === n
+                            ? 'bg-amber-600 border-amber-500 text-stone-900'
+                            : 'bg-stone-800 border-stone-600 text-stone-500 hover:border-amber-700 hover:text-amber-400'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-stone-600 text-xs mt-1.5">Empty slots filled with NPC opponents.</p>
+                </>
+              )}
+            </div>
+
+            {game.isHost && (
+              <div className="px-4 py-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs text-stone-500 uppercase tracking-widest font-bold">Visibility</p>
+                    <p className="text-xs text-stone-600 mt-0.5">
+                      {game.isPublic ? 'Anyone can find and join this game' : 'Only people with the invite code can join'}
+                    </p>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      await fetch(`/api/games/${gameId}/visibility`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ isPublic: !game.isPublic }),
+                      })
+                      fetchAll()
+                    }}
+                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${game.isPublic ? 'bg-amber-500' : 'bg-stone-700'}`}
+                  >
+                    <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${game.isPublic ? 'translate-x-5' : 'translate-x-0'}`} />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Character carousel */}
+          <CharacterCarousel
+            characters={CHARACTERS}
+            myClass={myClass}
+            takenClasses={takenClasses}
+            onSelect={selectCharacter}
+            onHelp={() => setShowCharHelp(true)}
+          />
+
+          {/* Players readiness card */}
+          <div className="bg-stone-900 border border-stone-700 rounded-xl overflow-hidden">
+            <div className="px-4 pt-3 pb-1">
+              <p className="text-xs text-stone-500 uppercase tracking-widest font-bold mb-2">Players</p>
+            </div>
+            {humanPlayers.map((p, i) => {
+              const selected = p.characterClass && p.characterClass !== 'unselected'
+              const isMe = p.id === player?.id
+              return (
+                <div key={p.id} className="px-4 py-3 border-b border-stone-800 last:border-0 flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: PLAYER_COLORS[p.turnOrder % PLAYER_COLORS.length] }} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <p className={`text-sm font-semibold truncate ${isMe ? 'text-amber-400' : 'text-stone-300'}`}>
+                        {p.name}
+                      </p>
+                      {isMe && (
+                        <button
+                          onClick={() => setNameDialogOpen(true)}
+                          className="text-xs text-stone-500 hover:text-amber-400 underline underline-offset-2 flex-shrink-0 transition cursor-pointer"
+                        >
+                          change
+                        </button>
+                      )}
+                    </div>
+                    <p className={`text-xs truncate ${selected ? 'text-green-400' : 'text-stone-500 italic'}`}>
+                      {selected ? p.characterClass!.replace(/_/g, ' ') : 'Choosing…'}
+                    </p>
+                  </div>
+                  <span className={`text-base flex-shrink-0 ${selected ? 'text-green-400' : 'text-stone-600'}`}>
+                    {selected ? '✓' : '○'}
+                  </span>
+                  {game.isHost && !isMe && (
+                    <button
+                      onClick={() => bootPlayer(p.id)}
+                      className="text-stone-700 hover:text-red-400 text-base leading-none flex-shrink-0 transition cursor-pointer ml-1"
+                      title={`Boot ${p.name}`}
+                      aria-label={`Boot ${p.name}`}
+                    >×</button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Start / ready */}
+          {!iAmReady && (
+            <p className="text-amber-500 text-xs text-center">Select your character above to continue</p>
+          )}
+          {game.isHost ? (
+            <button
+              disabled={!allReady || starting}
+              onClick={startGame}
+              className="w-full py-2.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed text-stone-900 font-bold rounded uppercase tracking-wide transition text-sm cursor-pointer"
+              title={!allReady ? 'Waiting for all players to select a character' : ''}
+            >
+              {starting ? 'Starting…' : allReady ? 'Start Game' : 'Waiting for players…'}
+            </button>
+          ) : (
+            <p className="text-stone-500 italic text-sm text-center">
+              {iAmReady ? 'Ready — waiting for host to start…' : 'Select a character to get ready'}
+            </p>
+          )}
+          <button
+            onClick={leaveGame}
+            className="w-full py-1.5 text-stone-600 hover:text-red-400 text-xs transition cursor-pointer"
+          >
+            {game.isHost ? 'Cancel Game' : 'Leave Lobby'}
+          </button>
+
+        </div>
+
+        {/* Why your character matters dialog */}
+        {showCharHelp && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowCharHelp(false)}>
+            <div className="bg-stone-900 border border-stone-700 rounded-xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between px-4 py-3 border-b border-stone-700">
+                <p className="text-xs text-stone-500 uppercase tracking-widest font-bold">Why Your Character Matters</p>
+                <button onClick={() => setShowCharHelp(false)} className="text-stone-500 hover:text-stone-200 text-xl leading-none cursor-pointer">✕</button>
+              </div>
+              <div className="px-4 py-4 space-y-3">
                 <p className="text-stone-400 text-xs leading-relaxed">
                   Your character class shapes your entire strategy. Each one has a meaningful perk and a real drawback — there is no neutral choice.
                 </p>
-                <div className="space-y-1.5 text-xs text-stone-500 leading-relaxed">
+                <div className="space-y-1.5 text-xs text-stone-400 leading-relaxed">
                   <p><span className="text-green-400 font-semibold">Production</span> — Union Leader &amp; Hillbilly snowball income if you invest in stills early.</p>
                   <p><span className="text-amber-400 font-semibold">Trade</span> — Socialite &amp; Pharmacist make fewer runs more profitable.</p>
                   <p><span className="text-blue-400 font-semibold">Expansion</span> — Gangster &amp; Rum Runner dominate territory.</p>
                   <p><span className="text-purple-400 font-semibold">Stealth</span> — Priest/Nun &amp; Vixen let you operate boldly without going to jail.</p>
                 </div>
-                <p className="text-stone-600 text-xs italic">Hint: your starting city's primary alcohol affects how well each build performs.</p>
+                <p className="text-stone-600 text-xs italic border-t border-stone-800 pt-3">Hint: your starting city's primary alcohol affects how well each build performs.</p>
               </div>
             </div>
           </div>
-
-        </div>
+        )}
 
         {/* Name change dialog */}
         {nameDialogOpen && (
@@ -1375,6 +1475,12 @@ export default function GamePage() {
 
   return (
     <div className="flex flex-col h-screen overflow-hidden" style={{ paddingLeft: 'env(safe-area-inset-left)', paddingRight: 'env(safe-area-inset-right)', paddingBottom: 'env(safe-area-inset-bottom)' }}>
+      <audio
+        ref={audioRef}
+        src="https://tile.loc.gov/streaming-services/iiif/service:mbrsrs:mbrsjukebox:dlc_victor_18561_01_b22750_03:dlc_victor_18561_01_b22750_03/full/full/0/full/default.mp3"
+        loop
+        preload="none"
+      />
       {/* Portrait-mode blocker */}
       <div className="portrait-blocker hidden fixed inset-0 z-[9999] bg-stone-950 flex-col items-center justify-center gap-6 p-8">
         <img src="/logo.png" alt="Prohibition" className="h-20 w-auto opacity-80" />
@@ -1416,7 +1522,7 @@ export default function GamePage() {
             totalSeasons={game?.totalSeasons ?? 52}
           />
         </div>
-        {gameId && (
+        {gameId && player?.role !== 'snitch' && (
           <button
             onClick={() => setNetWorthOpen(true)}
             className="flex items-center gap-1 px-2 py-1 rounded bg-stone-700 hover:bg-stone-600 text-stone-300 hover:text-amber-400 text-xs transition flex-shrink-0"
@@ -1440,6 +1546,25 @@ export default function GamePage() {
           title="Help"
         >
           ?
+        </button>
+        <button
+          onClick={() => setIsMuted(m => !m)}
+          className="px-2 py-1 rounded bg-stone-700 hover:bg-stone-600 text-stone-400 hover:text-amber-400 text-xs transition flex-shrink-0"
+          title={isMuted ? 'Unmute music' : 'Mute music'}
+        >
+          {isMuted ? (
+            <svg viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5">
+              <path d="M10 3L5 7H2a1 1 0 00-1 1v4a1 1 0 001 1h3l5 4V3z" opacity="0.4"/>
+              <line x1="14" y1="7" x2="19" y2="13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              <line x1="19" y1="7" x2="14" y2="13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+            </svg>
+          ) : (
+            <svg viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5">
+              <path d="M10 3L5 7H2a1 1 0 00-1 1v4a1 1 0 001 1h3l5 4V3z"/>
+              <path d="M13 7a4 4 0 010 6" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/>
+              <path d="M15 5a7 7 0 010 10" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/>
+            </svg>
+          )}
         </button>
         {fullState && player && (
           <span data-tutorial="chat">
@@ -1530,91 +1655,74 @@ export default function GamePage() {
               })()}
 
               <div data-tutorial="heat">
-                <HeatMeter heat={player?.heat ?? 0} />
+                <HeatMeter
+                  heat={policeEncounter?.heat ?? player?.heat ?? 0}
+                  characterClass={player?.characterClass}
+                  distilleries={player?.distilleries}
+                  cityCount={player?.distilleryCityIds?.length ?? 1}
+                  ledger={player?.heatLedger ?? []}
+                />
               </div>
 
-              <div className="bg-stone-800 border border-stone-600 rounded p-3">
-                <div className="flex items-center justify-between mb-1">
-                  <p className="text-xs text-stone-400 uppercase tracking-wider">Net Worth</p>
-                  <button
-                    onClick={() => setNetWorthOpen(true)}
-                    className="text-xs text-stone-500 hover:text-amber-300 underline underline-offset-2 transition"
-                  >
-                    Breakdown
-                  </button>
+              <div className="bg-stone-800 border border-stone-600 rounded p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-stone-400 uppercase tracking-wider">Cash</p>
+                  {player?.role !== 'snitch' && (
+                    <button
+                      onClick={() => setNetWorthOpen(true)}
+                      className="text-xs text-stone-500 hover:text-amber-300 underline underline-offset-2 transition"
+                    >
+                      Net worth breakdown
+                    </button>
+                  )}
                 </div>
-                <p className="text-2xl font-bold text-green-400">${liveNetWorth.toLocaleString()}</p>
-                <p className="text-xs text-stone-500 mt-0.5">Cash ${(player?.cash ?? 0).toLocaleString()}</p>
-              </div>
-
-              {homeCity && (() => {
-                const otherDists = (player?.distilleries ?? []).filter(d => d.cityId !== player?.homeCityId)
-                return (
-                  <div data-tutorial="distillery" className="bg-stone-800 border border-amber-800 rounded p-2 text-xs">
-                    <div className="flex items-center justify-between mb-1">
-                      <p className="text-amber-500 uppercase tracking-wider flex items-center gap-1">
-                        <span>⌂</span> Home Distillery
+                <p className="text-2xl font-bold text-green-400">${((player?.cash ?? 0) + cashAdjust).toLocaleString()}</p>
+                <p className="text-xs text-stone-500">Net worth ${liveNetWorth.toLocaleString()}</p>
+                {((player?.unitsStolen ?? 0) > 0 || (player?.unitsStolenFrom ?? 0) > 0) && (
+                  <div className="flex gap-3 pt-0.5">
+                    {(player?.unitsStolen ?? 0) > 0 && (
+                      <p className="text-xs text-amber-500" title="Total units you've stolen from rivals">
+                        🥃 Stolen: <span className="font-bold">{player!.unitsStolen}</span>
                       </p>
-                      {otherDists.length > 0 && (
-                        <button
-                          onClick={() => setDistilleriesOpen(true)}
-                          className="text-stone-400 hover:text-amber-300 text-xs underline underline-offset-2 transition"
-                        >
-                          +{otherDists.length} more
-                        </button>
-                      )}
-                    </div>
-                    <p className="text-amber-300 font-bold">{homeCity.name}</p>
-                    <p className="text-stone-400 mt-1 capitalize">
-                      Producing: <span className="text-green-400 font-semibold">{homeCity.primary_alcohol}</span>
-                    </p>
-                    <div className="mt-2 flex items-center justify-between">
-                      <span className="text-stone-500">Tier {homeDistillery?.tier ?? 1}</span>
-                      <span className="text-green-300 font-bold">+{homeProduction} units/season</span>
-                    </div>
-                    <div className="mt-1.5 flex gap-0.5">
-                      {Array.from({ length: 5 }, (_, i) => (
-                        <div key={i} className={`h-1.5 flex-1 rounded-sm ${i < (homeDistillery?.tier ?? 1) ? 'bg-amber-500' : 'bg-stone-700'}`} />
-                      ))}
-                    </div>
+                    )}
+                    {(player?.unitsStolenFrom ?? 0) > 0 && (
+                      <p className="text-xs text-red-500" title="Total units stolen from your distilleries">
+                        📦 Lost: <span className="font-bold">{player!.unitsStolenFrom}</span>
+                      </p>
+                    )}
                   </div>
-                )
-              })()}
-
-              {/* Distilleries popup */}
-              {distilleriesOpen && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={() => setDistilleriesOpen(false)}>
-                  <div className="absolute inset-0 bg-black/60" />
-                  <div className="relative bg-stone-900 border border-stone-600 rounded-lg shadow-2xl w-72 max-h-[70vh] flex flex-col" onClick={e => e.stopPropagation()}>
-                    <div className="flex items-center justify-between px-4 py-3 border-b border-stone-700">
-                      <p className="text-amber-300 font-bold text-sm">⚗ All Distilleries</p>
-                      <button onClick={() => setDistilleriesOpen(false)} className="text-stone-500 hover:text-stone-200 text-lg leading-none">✕</button>
-                    </div>
-                    <div className="overflow-y-auto flex-1 p-3 space-y-2">
-                      {(player?.distilleries ?? []).map(d => (
-                        <div key={d.id} className={`rounded p-2 text-xs border ${d.cityId === player?.homeCityId ? 'border-amber-800 bg-stone-800' : 'border-stone-700 bg-stone-800'}`}>
-                          <div className="flex items-center justify-between">
-                            <p className="font-bold text-stone-200">
-                              {d.cityId === player?.homeCityId && <span className="text-amber-500 mr-1">⌂</span>}
-                              {d.cityName}
-                            </p>
-                            <span className="text-stone-500">Tier {d.tier}</span>
-                          </div>
-                          <p className="text-stone-400 mt-0.5 capitalize">
-                            <span className="text-green-400 font-semibold">{d.primaryAlcohol}</span>
-                            {' · '}+{stillOutput(d.tier, d.isCoastal)} units/season
-                          </p>
-                          <div className="mt-1.5 flex gap-0.5">
-                            {Array.from({ length: 5 }, (_, i) => (
-                              <div key={i} className={`h-1 flex-1 rounded-sm ${i < d.tier ? (d.cityId === player?.homeCityId ? 'bg-amber-500' : 'bg-green-600') : 'bg-stone-700'}`} />
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                )}
+                {isMyTurn && (
+                  <div className="flex gap-1.5 pt-1">
+                    <button
+                      onClick={async () => {
+                        setSoldThisTurn(true)
+                        const res = await fetch(`/api/games/${gameId}/sell-distillery-stock`, { method: 'POST' })
+                        const data = await res.json()
+                        if (data.celebrations?.length) setCelebrationQueue(prev => [...prev, ...data.celebrations])
+                        fetchAll()
+                      }}
+                      disabled={soldThisTurn}
+                      title={soldThisTurn ? 'Already sold this turn' : 'Sell all distillery stock and vehicle cargo at cities where you have a car present'}
+                      className="flex-1 py-1.5 border border-green-700 hover:bg-green-900/40 disabled:opacity-40 disabled:cursor-not-allowed text-green-400 font-bold rounded uppercase tracking-wide text-xs transition"
+                    >
+                      💰 Sell Everything
+                    </button>
+                    <button
+                      onClick={async () => {
+                        setMaxedThisTurn(true)
+                        await fetch(`/api/games/${gameId}/max-out-vehicles`, { method: 'POST' })
+                        fetchAll()
+                      }}
+                      disabled={maxedThisTurn}
+                      title={maxedThisTurn ? 'Already maxed out this turn' : 'Fill each car to capacity with the alcohol of the city it is parked in'}
+                      className="flex-1 py-1.5 border border-amber-700 hover:bg-amber-900/40 disabled:opacity-40 disabled:cursor-not-allowed text-amber-400 font-bold rounded uppercase tracking-wide text-xs transition"
+                    >
+                      🚗 Max-out Cars
+                    </button>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
 
               <InventoryPanel
                 data-tutorial="inventory"
@@ -1631,21 +1739,35 @@ export default function GamePage() {
                 currentSeason={game?.currentSeason ?? 1}
                 onManageFleet={() => setVehiclesOpen(true)}
                 isMyTurn={isMyTurn}
-                soldThisTurn={soldThisTurn}
-                maxedThisTurn={maxedThisTurn}
-                onSellAll={async () => {
-                  setSoldThisTurn(true)
-                  const res = await fetch(`/api/games/${gameId}/sell-distillery-stock`, { method: 'POST' })
-                  const data = await res.json()
-                  if (data.celebrations?.length) setCelebrationQueue(prev => [...prev, ...data.celebrations])
-                  fetchAll()
-                }}
-                onMaxOut={async () => {
-                  setMaxedThisTurn(true)
-                  await fetch(`/api/games/${gameId}/max-out-vehicles`, { method: 'POST' })
-                  fetchAll()
-                }}
               />
+
+              {/* Cities panel */}
+              {(player?.distilleries ?? []).length > 0 && (
+                <div data-tutorial="distillery" className="bg-stone-800 border border-stone-600 rounded p-3 space-y-2">
+                  <p className="text-xs text-stone-400 uppercase tracking-wider">Cities</p>
+                  <ul className="space-y-2">
+                    {(player?.distilleries ?? []).map(d => (
+                      <li key={d.id} className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-stone-200 font-semibold text-xs">
+                            {d.cityId === player?.homeCityId && <span className="text-amber-500 mr-1">⌂</span>}
+                            {d.cityName}
+                          </span>
+                          <span className="text-green-300 font-bold text-xs">+{stillOutput(d.tier, d.isCoastal)}/season</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="flex gap-0.5 flex-1">
+                            {Array.from({ length: 5 }, (_, i) => (
+                              <div key={i} className={`h-1.5 flex-1 rounded-sm ${i < d.tier ? 'bg-amber-500' : 'bg-stone-700'}`} />
+                            ))}
+                          </div>
+                          <span className="text-stone-500 text-xs capitalize shrink-0">{d.primaryAlcohol} · T{d.tier}</span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               <button
                 onClick={() => setShowPaper(true)}
@@ -1737,6 +1859,63 @@ export default function GamePage() {
           />
         )}
 
+        {/* One-time intro dialog when Feds button first appears */}
+        {!fedsIntroSeen && game != null && player?.role !== 'snitch' &&
+          game.currentSeason > Math.floor(game.totalSeasons * 0.2) && (
+          <FedsIntroDialog onDismiss={() => {
+            localStorage.setItem(`feds_intro_seen_${gameId}`, '1')
+            setFedsIntroSeen(true)
+          }} />
+        )}
+
+        {/* Accusation result dialog */}
+        {accusationResult && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/80" onClick={() => setAccusationResult(null)} />
+            <div className="relative bg-stone-900 border border-indigo-900 rounded-lg shadow-2xl w-80 flex flex-col">
+              <div className={`px-4 py-3 border-b rounded-t-lg ${accusationResult.success ? 'border-green-900/60 bg-green-950/30' : 'border-red-900/60 bg-red-950/30'}`}>
+                <p className="text-xs uppercase tracking-wider font-semibold" style={{ color: accusationResult.success ? '#86efac' : '#fca5a5' }}>
+                  {accusationResult.success ? 'Accusation Confirmed' : 'Accusation Failed'}
+                </p>
+                <p className="text-stone-200 font-bold text-lg mt-0.5">
+                  {accusationResult.success ? '🕵️ Yeah, you did it' : '🕵️ Sorry, no'}
+                </p>
+              </div>
+              <div className="px-4 py-3 text-sm text-stone-300">
+                {accusationResult.success
+                  ? <><span className="font-semibold text-amber-300">{accusationResult.targetName}</span> has been arrested by federal agents and sent to jail.</>
+                  : <>Your intel on <span className="font-semibold text-amber-300">{accusationResult.targetName}</span> was wrong. Your next stipend has been burned as penalty.</>
+                }
+              </div>
+              <div className="px-4 pb-4">
+                <button
+                  onClick={() => setAccusationResult(null)}
+                  className="w-full py-2 bg-stone-700 hover:bg-stone-600 text-stone-100 font-bold rounded uppercase tracking-wide text-sm transition"
+                >
+                  Understood
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Feds dialog — counter-intel tools for bootlegger players */}
+        {fedsOpen && player && fullState && (
+          <FedsDialog
+            playerCash={player.cash}
+            viewCityId={viewCityId}
+            viewCityName={viewCityId != null ? (mapCities.find(c => c.id === viewCityId)?.name ?? null) : null}
+            vehicleAtViewCity={viewCityId != null && (player.vehicles ?? []).some(v => v.cityId === viewCityId)}
+            isMyTurn={isMyTurn}
+            otherPlayers={fullState.players.filter(p => p.id !== player.id).map(p => ({ id: p.id, name: p.name, isNpc: p.isNpc }))}
+            onClose={() => setFedsOpen(false)}
+            onFederalBribe={() => { setFedsOpen(false); submitTurn([{ type: 'pay_federal_bribe' }], { refresh: false }).then(() => fetchAll()) }}
+            onSweepCity={() => { setFedsOpen(false); submitTurn([{ type: 'sweep_city', cityId: viewCityId ?? undefined }], { refresh: false }).then(() => fetchAll()) }}
+            onBuyFedIntel={() => { setFedsOpen(false); submitTurn([{ type: 'buy_fed_intel', cityId: viewCityId ?? undefined }], { refresh: false }).then(() => fetchAll()) }}
+            onFingerSnitch={(targetId) => { setFedsOpen(false); submitTurn([{ type: 'finger_snitch', cityId: targetId }]) }}
+          />
+        )}
+
         {/* Informant network dialog — for snitch players */}
         {informantNetworkOpen && player && fullState && (
           <InformantNetworkDialog
@@ -1744,10 +1923,12 @@ export default function GamePage() {
             pendingSightings={player.pendingSightings ?? []}
             mapCities={mapCities.map(c => ({ id: c.id, name: c.name }))}
             otherPlayers={fullState.players.filter(p => p.id !== player.id).map(p => ({ id: p.id, name: p.name, role: p.role, isNpc: p.isNpc }))}
+            vehicles={player.vehicles ?? []}
             vehicleCityIds={new Set((player.vehicles ?? []).map(v => v.cityId))}
             currentSeason={game?.currentSeason ?? 1}
             playerCash={player.cash}
             isMyTurn={isMyTurn}
+            accusationFiledThisTurn={accusationFiledThisTurn}
             onClose={() => setInformantNetworkOpen(false)}
             onPlaceInformant={(informantId, cityId) => {
               submitTurn([{ type: 'place_informant', vehicleId: informantId, cityId }])
@@ -1838,8 +2019,8 @@ export default function GamePage() {
             distilleries={player?.distilleries ?? []}
             vehicleCityIds={new Set((player?.vehicles ?? []).map(v => v.cityId))}
             characterClass={player?.characterClass ?? ''}
-            cash={player?.cash ?? 0}
-            onUpgrade={(cityId) => submitTurn([{ type: 'upgrade_still', cityId }])}
+            cash={(player?.cash ?? 0) + cashAdjust}
+            onUpgrade={(cityId, cost) => { setCashAdjust(prev => prev - cost); submitTurn([{ type: 'upgrade_still', cityId }]) }}
             onClose={() => setStillOpen(false)}
           />
         )}
@@ -1851,7 +2032,7 @@ export default function GamePage() {
             ? (fullState?.players ?? []).find(p => p.id === city.owner_player_id) ?? null
             : null
           const ownerColor = ownerPlayer
-            ? PLAYER_COLORS[(fullState?.players ?? []).findIndex(p => p.id === ownerPlayer.id) % PLAYER_COLORS.length]
+            ? PLAYER_COLORS[ownerPlayer.turnOrder % PLAYER_COLORS.length]
             : null
           return (
             <CityDetailDialog
@@ -1986,19 +2167,31 @@ export default function GamePage() {
             )}
           </button>
           {/* Map mode toggle — top-left */}
-          <button
-            onClick={() => {
-              setMapMode(m => m === 'normal' ? 'info' : m === 'info' ? 'simple' : 'normal')
-              setInfoCityId(null)
-            }}
-            className={`absolute top-2 left-2 z-10 flex items-center gap-1.5 px-3 py-1.5 backdrop-blur-sm border rounded uppercase tracking-wide text-xs font-bold transition ${
-              mapMode === 'info'   ? 'bg-blue-900/80 border-blue-500 text-blue-200 hover:bg-blue-800/80'
-              : mapMode === 'simple' ? 'bg-amber-900/80 border-amber-500 text-amber-200 hover:bg-amber-800/80'
-              : 'bg-stone-900/80 border-stone-600 text-stone-400 hover:bg-stone-700/80 hover:text-stone-200'
-            }`}
-          >
-            {mapMode === 'info' ? 'ℹ Info' : mapMode === 'simple' ? '⬡ Simple' : '🗺 Map'}
-          </button>
+          <div className="absolute top-2 left-2 z-10 flex items-center gap-1.5">
+            <button
+              onClick={() => {
+                setMapMode(m => m === 'normal' ? 'info' : m === 'info' ? 'simple' : 'normal')
+                setInfoCityId(null)
+              }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 backdrop-blur-sm border rounded uppercase tracking-wide text-xs font-bold transition ${
+                mapMode === 'info'   ? 'bg-blue-900/80 border-blue-500 text-blue-200 hover:bg-blue-800/80'
+                : mapMode === 'simple' ? 'bg-amber-900/80 border-amber-500 text-amber-200 hover:bg-amber-800/80'
+                : 'bg-stone-900/80 border-stone-600 text-stone-400 hover:bg-stone-700/80 hover:text-stone-200'
+              }`}
+            >
+              {mapMode === 'info' ? 'ℹ Info' : mapMode === 'simple' ? '⬡ Simple' : '🗺 Map'}
+            </button>
+            <button
+              onClick={() => setShowCoastal(v => !v)}
+              className={`flex items-center gap-1 px-2.5 py-1.5 backdrop-blur-sm border rounded uppercase tracking-wide text-xs font-bold transition ${
+                showCoastal
+                  ? 'bg-teal-900/80 border-teal-500 text-teal-200 hover:bg-teal-800/80'
+                  : 'bg-stone-900/80 border-stone-600 text-stone-400 hover:bg-stone-700/80 hover:text-stone-200'
+              }`}
+            >
+              ⚓ Coast
+            </button>
+          </div>
           {mapMode === 'info' && (
             <div className="absolute top-10 left-2 z-10 text-xs text-blue-300/70 bg-stone-900/70 backdrop-blur-sm px-2 py-1 rounded pointer-events-none">
               Tap a city to inspect
@@ -2023,22 +2216,6 @@ export default function GamePage() {
               </span>
             </div>
           )}
-          {/* City background image — shown behind the map when a city is selected */}
-          {mapMode !== 'info' && viewCityId != null && (() => {
-            const city = mapCities.find(c => c.id === viewCityId)
-            if (!city) return null
-            const slug = city.name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '')
-            return (
-              <div className="absolute inset-0 z-0">
-                <img
-                  src={`/cities/${slug}.png`}
-                  alt=""
-                  className="w-full h-full object-cover"
-                  style={{ filter: 'sepia(0.2) brightness(0.85) contrast(1.05)', opacity: 0.4, transition: 'opacity 0.4s' }}
-                />
-              </div>
-            )
-          })()}
 
           {/* Info mode city card — bottom-left of map pane */}
           {mapMode === 'info' && infoCityId != null && (() => {
@@ -2046,10 +2223,7 @@ export default function GamePage() {
             if (!city) return null
             const owner = fullState?.players.find(p => p.id === city.owner_player_id)
             const TIER_LABEL: Record<string, string> = { small: 'Small', medium: 'Medium', large: 'Large', major: 'Major' }
-            const baseClaimCost = BASE_CLAIM_COST[city.population_tier] ?? 500
-            const displayCost = city.owner_player_id == null
-              ? Math.floor(baseClaimCost * (player?.claimCostMultiplier ?? 1))
-              : (city.claim_cost > 0 ? city.claim_cost * 2 : baseClaimCost * 2)
+            const displayCost = cityTakeoverCost(city, player?.claimCostMultiplier ?? 1)
             const costLabel = city.owner_player_id == null ? 'Claim cost' : 'Takeover cost'
             return (
               <div className="absolute bottom-4 left-4 z-20 bg-stone-900/90 backdrop-blur-sm border border-stone-600 rounded-lg p-3 min-w-[180px] shadow-xl">
@@ -2116,12 +2290,24 @@ export default function GamePage() {
                   pathCityIds={moveMode ? new Set(vehicleMoves.flatMap(vm => vm.targetPath)) : null}
                   cityStockpiles={cityStockpileTotal}
                   onCityClick={handleCityClick}
-                  transparent={viewCityId != null}
                   simplified={mapMode === 'simple'}
+                  highlightCoastal={showCoastal}
                 />
               </div>
             </TransformComponent>
           </TransformWrapper>
+
+          {/* Zoom controls — bottom-right of map */}
+          <div className="absolute bottom-4 right-4 z-20 flex flex-col gap-1">
+            <button
+              onClick={() => transformRef.current?.zoomIn(0.5)}
+              className="w-8 h-8 flex items-center justify-center bg-stone-800/90 hover:bg-stone-700 border border-stone-600 rounded text-stone-200 text-lg font-bold leading-none transition shadow"
+            >+</button>
+            <button
+              onClick={() => transformRef.current?.zoomOut(0.5)}
+              className="w-8 h-8 flex items-center justify-center bg-stone-800/90 hover:bg-stone-700 border border-stone-600 rounded text-stone-200 text-lg font-bold leading-none transition shadow"
+            >−</button>
+          </div>
         </div>
 
         {/* Right sidebar */}
@@ -2220,6 +2406,9 @@ export default function GamePage() {
                         </p>
                       )}
                     </div>
+                  )}
+                  {turnError && (
+                    <p className="text-xs text-red-400 bg-red-950/40 border border-red-800 rounded px-2 py-1">{turnError}</p>
                   )}
                   <button
                     onClick={() => submitTurn([{ type: 'move', roll: diceRoll, vehicles: vehicleMoves.filter(vm => vm.targetPath.length > 0) }], { transition: true })}
@@ -2445,25 +2634,14 @@ export default function GamePage() {
                     </button>
                   )}
 
-                  {/* ── Counter-snitch tools (bootleggers only) ── */}
-                  {player?.role !== 'snitch' && (
-                    <>
-                      <button
-                        onClick={() => submitTurn([{ type: 'pay_federal_bribe' }])}
-                        className="w-full py-2 border border-stone-600 hover:bg-stone-700 disabled:opacity-40 text-stone-300 font-bold rounded uppercase tracking-wide text-sm transition"
-                        title="Pay $400 — reduces federal stop probability for 4 seasons"
-                      >
-                        🏛 Federal Bribe — $400
-                      </button>
-                      <button
-                        disabled={viewCityId == null || !(player?.vehicles ?? []).some(v => v.cityId === viewCityId)}
-                        onClick={() => submitTurn([{ type: 'sweep_city', cityId: viewCityId ?? undefined }])}
-                        title={viewCityId == null || !(player?.vehicles ?? []).some(v => v.cityId === viewCityId) ? 'Move a car to a city to sweep it for informants' : 'Check selected city for informants ($100–400)'}
-                        className="w-full py-2 border border-stone-600 hover:bg-stone-700 disabled:opacity-40 disabled:cursor-not-allowed text-stone-300 font-bold rounded uppercase tracking-wide text-sm transition"
-                      >
-                        🔍 Sweep City
-                      </button>
-                    </>
+                  {/* ── Feds button — counter-intel tools, revealed after 20% of the game ── */}
+                  {player?.role !== 'snitch' && (game?.currentSeason ?? 0) > Math.floor((game?.totalSeasons ?? 52) * 0.2) && (
+                    <button
+                      onClick={() => setFedsOpen(true)}
+                      className="w-full py-2 border border-stone-600 hover:bg-stone-700 text-stone-300 font-bold rounded uppercase tracking-wide text-sm transition"
+                    >
+                      🏛 Feds
+                    </button>
                   )}
 
                   <hr className="border-stone-700" />
@@ -2530,15 +2708,11 @@ export default function GamePage() {
               ? (fullState?.players ?? []).find(p => p.id === city.owner_player_id) ?? null
               : null
             const ownerColor = ownerPlayer
-              ? PLAYER_COLORS[(fullState?.players ?? []).findIndex(p => p.id === ownerPlayer.id) % PLAYER_COLORS.length]
+              ? PLAYER_COLORS[ownerPlayer.turnOrder % PLAYER_COLORS.length]
               : null
             const isMyCity   = city?.owner_player_id === player?.id
             const isAtCity   = (player?.vehicles ?? []).some(v => v.cityId === viewCityId)
-            const claimCost  = city
-              ? (city.owner_player_id == null
-                  ? Math.floor((BASE_CLAIM_COST[city.population_tier] ?? 500) * (player?.claimCostMultiplier ?? 1))
-                  : (city.claim_cost || BASE_CLAIM_COST[city.population_tier] || 500) * 2)
-              : 0
+            const claimCost  = city ? cityTakeoverCost(city, player?.claimCostMultiplier ?? 1) : 0
             const canAffordClaim = (player?.cash ?? 0) >= claimCost
             return (
               <div className="space-y-1.5">
@@ -2596,7 +2770,7 @@ export default function GamePage() {
               {fullState.players.map((p, i) => (
                 <div key={p.id} className="flex items-center justify-between gap-2 text-xs">
                   <div className="flex items-center gap-2 min-w-0">
-                    <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: PLAYER_COLORS[i % PLAYER_COLORS.length] }} />
+                    <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: PLAYER_COLORS[p.turnOrder % PLAYER_COLORS.length] }} />
                     <button
                       onClick={() => {
                         const charInfo = CHARACTER_DISPLAY[p.characterClass]
@@ -2606,45 +2780,13 @@ export default function GamePage() {
                     >
                       {p.name}{p.isNpc ? ' (NPC)' : ''}
                       {p.turnOrder === game?.currentPlayerIndex ? ' ●' : ''}
-                      {p.turnOrder === game?.currentPlayerIndex && !p.isNpc && (
-                        <TurnTimer startedAt={p.turnStartedAt} />
-                      )}
                     </button>
                   </div>
-                  {/* Finger-snitch button — visible to bootleggers for any other player */}
-                  {isMyTurn && !isInJail && player?.role !== 'snitch' && p.id !== player?.id && (
-                    <button
-                      onClick={() => submitTurn([{ type: 'finger_snitch', cityId: p.id }])}
-                      className="flex-shrink-0 text-xs text-stone-600 hover:text-red-400 border border-stone-700 hover:border-red-800 rounded px-1.5 py-0.5 transition"
-                      title={`Finger ${p.name} as a snitch — $500+`}
-                    >
-                      🫵
-                    </button>
-                  )}
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <span className="text-stone-600" title="Vehicles">🚗 {(p as any).vehicleCount ?? 0}</span>
+                  </div>
                 </div>
               ))}
-              {/* Buy fed intel — separate from player rows */}
-              {isMyTurn && !isInJail && player?.role !== 'snitch' && fullState.players.some(p => p.id !== player?.id) && (
-                <div className="mt-1.5 space-y-1">
-                  <p className="text-xs text-stone-600 uppercase tracking-wider">Counter-Intel</p>
-                  <select
-                    defaultValue=""
-                    onChange={e => {
-                      if (e.target.value) {
-                        submitTurn([{ type: 'buy_fed_intel', cityId: Number(e.target.value) }])
-                        e.target.value = ''
-                      }
-                    }}
-                    className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs text-stone-400 focus:outline-none"
-                    title="Spend $300 to check if target has active informants"
-                  >
-                    <option value="">🗂 Buy Intel — $300…</option>
-                    {fullState.players.filter(p => p.id !== player?.id).map(p => (
-                      <option key={p.id} value={p.id}>{p.name}{p.isNpc ? ' (NPC)' : ''}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
             </div>
           )}
 
