@@ -5,6 +5,8 @@ import {
   selectNpcAction,
   computeNpcTakeoverCost,
   selectNpcTarget,
+  shouldNpcFlipToSnitch,
+  npcCanAccuse,
   type NpcState,
   type NpcAction
 } from '../src/game/npc'
@@ -149,5 +151,53 @@ describe('computeNpcTakeoverCost()', () => {
   it('owned city uses stored claim_cost (ignores BASE_CLAIM)', () => {
     // claim_cost = 1500, neutral=false → 2 × 1500 = 3000
     expect(computeNpcTakeoverCost(1500, 'large', 1, false)).toBe(3000)
+  })
+})
+
+describe('shouldNpcFlipToSnitch()', () => {
+  it('returns false when NPC is not last place, even if broke and jailed', () => {
+    expect(shouldNpcFlipToSnitch(100, 2, false)).toBe(false)
+  })
+
+  it('returns false when cash >= $300, even if last place and jailed', () => {
+    expect(shouldNpcFlipToSnitch(300, 1, true)).toBe(false)
+  })
+
+  it('returns false when jailed_count = 0, even if last place and broke', () => {
+    expect(shouldNpcFlipToSnitch(100, 0, true)).toBe(false)
+  })
+
+  it('returns true when last-place NPC, cash < $300, and jailed_count > 0', () => {
+    expect(shouldNpcFlipToSnitch(299, 1, true)).toBe(true)
+  })
+
+  it('returns false when cash is exactly $300 (boundary — not below)', () => {
+    expect(shouldNpcFlipToSnitch(300, 2, true)).toBe(false)
+  })
+})
+
+describe('npcCanAccuse()', () => {
+  it('returns false when fewer than 2 sightings', () => {
+    expect(npcCanAccuse([{ cityId: 1 }], [1])).toBe(false)
+  })
+
+  it('returns false when sightings exist but target vehicle city not in sightings', () => {
+    const sightings = [{ cityId: 1 }, { cityId: 2 }]
+    expect(npcCanAccuse(sightings, [1, 3])).toBe(false)
+  })
+
+  it('returns false when vehicleCityIds is empty (no vehicles to pin)', () => {
+    const sightings = [{ cityId: 1 }, { cityId: 2 }]
+    expect(npcCanAccuse(sightings, [])).toBe(false)
+  })
+
+  it('returns true when >= 2 sightings and all vehicle city IDs are pinned', () => {
+    const sightings = [{ cityId: 5 }, { cityId: 7 }]
+    expect(npcCanAccuse(sightings, [5, 7])).toBe(true)
+  })
+
+  it('returns true when sightings contain superset of vehicle cities', () => {
+    const sightings = [{ cityId: 1 }, { cityId: 2 }, { cityId: 3 }]
+    expect(npcCanAccuse(sightings, [2])).toBe(true)
   })
 })
