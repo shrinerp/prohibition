@@ -201,7 +201,7 @@ export async function runNpcTurn(
       `SELECT id FROM game_players WHERE game_id = ? AND is_npc = 1 ORDER BY cash DESC`
     ).bind(gameId).all<{ id: number }>()
     const isLastNpc = wealthRank.results[wealthRank.results.length - 1]?.id === npcId
-    if (isLastNpc && npcRow.cash < 300 && npcRow.jailed_count > 0) {
+    if (shouldNpcFlipToSnitch(npcRow.cash, npcRow.jailed_count, isLastNpc)) {
       await db.prepare(`UPDATE game_players SET role = 'snitch' WHERE id = ?`).bind(npcId).run()
       await db.batch([
         db.prepare(`INSERT INTO informants (game_id, snitch_id) VALUES (?, ?)`).bind(gameId, npcId),
@@ -244,10 +244,7 @@ export async function runNpcTurn(
         const { results: targetVehicles } = await db.prepare(
           `SELECT id, city_id FROM vehicles WHERE player_id = ?`
         ).bind(target.id).all<{ id: number; city_id: number }>()
-        const allPinned = targetVehicles.every(v =>
-          sightings.some(s => s.cityId === v.city_id)
-        )
-        if (allPinned && targetVehicles.length > 0) {
+        if (npcCanAccuse(sightings, targetVehicles.map(v => v.city_id))) {
           const alreadyAccused = await db.prepare(
             `SELECT id FROM snitch_accusations WHERE game_id = ? AND snitch_id = ? AND target_id = ? AND season = ?`
           ).bind(gameId, npcId, target.id, season).first()
@@ -540,6 +537,25 @@ async function tryUpgradeStill(
 }
 
 const BASE_CLAIM: Record<string, number> = { small: 500, medium: 1000, large: 1500, major: 2500 }
+
+/**
+ * Pure predicate: should this NPC flip to snitch role?
+ * Threshold: last-place NPC by cash AND cash < $300 AND at least one prior jail.
+ * Exported for unit testing.
+ */
+export function shouldNpcFlipToSnitch(cash: number, jailedCount: number, isLastNpc: boolean): boolean {
+  return isLastNpc && cash < 300 && jailedCount > 0
+}
+
+/**
+ * Pure predicate: can the NPC snitch file a valid accusation against a target?
+ * Requires >= 2 sightings and all of the target's vehicle city IDs pinned in those sightings.
+ * Exported for unit testing.
+ */
+export function npcCanAccuse(sightings: Array<{ cityId: number }>, vehicleCityIds: number[]): boolean {
+  if (sightings.length < 2 || vehicleCityIds.length === 0) return false
+  return vehicleCityIds.every(cityId => sightings.some(s => s.cityId === cityId))
+}
 
 /**
  * Pure cost calculation for NPC city takeovers — mirrors human claim_city logic.
