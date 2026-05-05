@@ -2231,7 +2231,7 @@ export default function GamePage() {
                 <div className="space-y-1 text-xs">
                   <div className="flex items-center justify-between gap-4">
                     <span className="text-stone-400">Produces</span>
-                    <span className="text-green-400 font-semibold capitalize">{city.primary_alcohol}</span>
+                    <span className="text-green-400 font-semibold capitalize">{ALCOHOL_EMOJI[city.primary_alcohol] ?? '🥃'} {city.primary_alcohol}</span>
                   </div>
                   <div className="flex items-center justify-between gap-4">
                     <span className="text-stone-400">City size</span>
@@ -2262,7 +2262,7 @@ export default function GamePage() {
             if (!city) return null
             return (
               <div className="absolute bottom-4 left-4 z-20 pointer-events-none">
-                <p className="text-xs text-stone-400 uppercase tracking-widest leading-none mb-0.5">{city.population_tier} · {city.primary_alcohol}</p>
+                <p className="text-xs text-stone-400 uppercase tracking-widest leading-none mb-0.5">{city.population_tier} · {ALCOHOL_EMOJI[city.primary_alcohol] ?? ''} {city.primary_alcohol}</p>
                 <p className="text-2xl font-bold text-amber-200 drop-shadow-lg leading-tight"
                   style={{ textShadow: '0 2px 8px rgba(0,0,0,0.9)' }}>{city.name}</p>
               </div>
@@ -2725,7 +2725,7 @@ export default function GamePage() {
                 </button>
                 <p className="text-xs text-stone-500 capitalize">{city?.population_tier}</p>
                 <p className="text-xs text-stone-500">
-                  Produces: <span className="text-green-400 font-semibold capitalize">{city?.primary_alcohol}</span>
+                  Produces: <span className="text-green-400 font-semibold capitalize">{ALCOHOL_EMOJI[city?.primary_alcohol ?? ''] ?? '🥃'} {city?.primary_alcohol}</span>
                 </p>
                 <p className="text-xs text-stone-500">
                   {city?.owner_player_id == null ? 'Claim' : 'Takeover'}: <span className="text-amber-400 font-semibold">${claimCost.toLocaleString()}</span>
