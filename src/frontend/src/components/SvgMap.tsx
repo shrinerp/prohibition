@@ -144,7 +144,7 @@ export default function SvgMap({ cities, roads, playerTokens, currentCityId, hom
                 key={i}
                 d={`M ${a.x} ${a.y} Q ${cx} ${cy} ${b.x} ${b.y}`}
                 fill="none"
-                stroke="#b07830" strokeWidth="1" strokeOpacity="0.6"
+                stroke="#b07830" strokeWidth="1" strokeOpacity="0.6" strokeDasharray="4 3"
                 style={{ pointerEvents: 'none' }}
               />
             )
@@ -176,7 +176,7 @@ export default function SvgMap({ cities, roads, playerTokens, currentCityId, hom
                 key={`reach-${i}`}
                 d={`M ${a.x} ${a.y} Q ${cx} ${cy} ${b.x} ${b.y}`}
                 fill="none"
-                stroke="#ffffff" strokeWidth="1.5" strokeOpacity="0.55"
+                stroke="#ffffff" strokeWidth="1.5" strokeOpacity="0.55" strokeDasharray="4 3"
                 style={{ pointerEvents: 'none' }}
               />
             )

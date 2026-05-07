@@ -2269,6 +2269,14 @@ export default function GamePage() {
             )
           })()}
 
+          {/* Map title */}
+          <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 pointer-events-none select-none">
+            <p className="text-amber-200/40 tracking-[0.5em] uppercase text-xs"
+               style={{ fontFamily: "'Courier New', Courier, monospace" }}>
+              Prohibitioner
+            </p>
+          </div>
+
           <TransformWrapper
             ref={transformRef}
             minScale={1}
