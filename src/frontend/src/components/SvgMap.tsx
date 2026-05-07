@@ -15,6 +15,7 @@ export interface CityNode {
   lat: number
   lon: number
   ownerColor?: string
+  isCoastal?: boolean
 }
 
 export interface Road {
@@ -41,6 +42,7 @@ interface SvgMapProps {
   pathCityIds?: Set<number> | null
   cityStockpiles?: Map<number, number>
   simplified?: boolean
+  highlightCoastal?: boolean
   onCityClick?: (cityId: number) => void
 }
 
@@ -66,13 +68,14 @@ const pathGen = geoPath().projection(projection)
 
 const NATION_D = pathGen(nationGeo) ?? ''
 const STATES_D = pathGen(stateMesh) ?? ''
+const STATE_PATHS = statesGeo.features.map(f => pathGen(f) ?? '')
 
 export function projectLatLon(lat: number, lon: number): { x: number; y: number } | null {
   const coords = projection([lon, lat])
   return coords ? { x: coords[0], y: coords[1] } : null
 }
 
-export default function SvgMap({ cities, roads, playerTokens, currentCityId, homeCityId, selectedCityId, reachableCityIds, pathCityIds, cityStockpiles, onCityClick, transparent, simplified }: SvgMapProps) {
+export default function SvgMap({ cities, roads, playerTokens, currentCityId, homeCityId, selectedCityId, reachableCityIds, pathCityIds, cityStockpiles, onCityClick, transparent, simplified, highlightCoastal }: SvgMapProps) {
   const positions = useMemo(() => {
     const map = new Map<number, { x: number; y: number }>()
     for (const city of cities) {
@@ -86,33 +89,100 @@ export default function SvgMap({ cities, roads, playerTokens, currentCityId, hom
     <svg
       viewBox={`0 0 ${SVG_W} ${SVG_H}`}
       className="w-full h-full"
-      style={{ background: (transparent || simplified) ? 'transparent' : '#1c1917' }}
+      style={{ background: (transparent || simplified) ? 'transparent' : '#1a1006' }}
     >
-      {/* Water / ocean fill behind land */}
-      {!transparent && !simplified && <rect width={SVG_W} height={SVG_H} fill="#1c1917" />}
+      <defs>
+        <filter id="map-sepia">
+          <feColorMatrix type="matrix" values="
+            0.50 0.35 0.15 0 0.04
+            0.38 0.48 0.14 0 0.02
+            0.18 0.22 0.60 0 0
+            0    0    0    1 0
+          "/>
+        </filter>
+        {/* Subtle hand-drawn wobble — applied to borders and roads */}
+        <filter id="map-wobble" x="-5%" y="-5%" width="110%" height="110%">
+          <feTurbulence type="fractalNoise" baseFrequency="0.022" numOctaves="2" seed="42" result="noise"/>
+          <feDisplacementMap in="SourceGraphic" in2="noise" scale="3" xChannelSelector="R" yChannelSelector="G"/>
+        </filter>
+      </defs>
 
-      {/* Land fill */}
-      <path d={NATION_D} fill="#292524" fillOpacity={transparent ? 0.7 : 1} />
+      {/* Ocean background */}
+      {!transparent && !simplified && <rect width={SVG_W} height={SVG_H} fill="#1a1006" style={{ pointerEvents: 'none' }} />}
 
-      {/* Outer nation border */}
-      <path d={NATION_D} fill="none" stroke={transparent ? '#d6c9a8' : '#6b6360'} strokeWidth={transparent ? 1.5 : 1} strokeOpacity={transparent ? 0.8 : 0.6} />
+      {/* Borders, state fills, and roads — sepia toned */}
+      <g filter="url(#map-sepia)">
+        {/* Individual state fills — slightly lighter than bg for contrast */}
+        {!transparent && STATE_PATHS.map((d, i) => (
+          <path key={i} d={d} fill="#2a1a0c" style={{ pointerEvents: 'none' }} />
+        ))}
 
-      {/* State borders */}
-      <path d={STATES_D} fill="none" stroke={transparent ? '#ffffff' : '#44403c'} strokeWidth={transparent ? 1.2 : 0.8} strokeOpacity={transparent ? 0.6 : 1} />
+        {/* Borders and roads — wrapped in wobble filter for hand-drawn feel */}
+        <g filter="url(#map-wobble)">
+          {/* State borders (interior) — subtle */}
+          <path d={STATES_D} fill="none" stroke="#6b3e18" strokeWidth="0.7" strokeOpacity="0.7" style={{ pointerEvents: 'none' }} />
 
-      {/* Roads */}
-      {roads.map((road, i) => {
-        const a = positions.get(road.fromCityId)
-        const b = positions.get(road.toCityId)
-        if (!a || !b) return null
-        return (
-          <line
-            key={i}
-            x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-            stroke="#78716c" strokeWidth="1.2" strokeOpacity="0.6"
-          />
-        )
-      })}
+          {/* Outer nation border — prominent */}
+          <path d={NATION_D} fill="none" stroke={transparent ? '#d6c9a8' : '#c4843a'} strokeWidth={transparent ? 1.5 : 2} strokeOpacity={transparent ? 0.8 : 0.9} style={{ pointerEvents: 'none' }} />
+
+          {/* Roads — solid ink lines */}
+          {roads.map((road, i) => {
+            const a = positions.get(road.fromCityId)
+            const b = positions.get(road.toCityId)
+            if (!a || !b) return null
+            const mx = (a.x + b.x) / 2
+            const my = (a.y + b.y) / 2
+            const dx = b.x - a.x
+            const dy = b.y - a.y
+            const len = Math.sqrt(dx * dx + dy * dy) || 1
+            const sign = (road.fromCityId + road.toCityId) % 2 === 0 ? 1 : -1
+            const bendAmount = len * 0.08
+            const cx = mx + sign * (-dy / len) * bendAmount
+            const cy = my + sign * (dx / len) * bendAmount
+            return (
+              <path
+                key={i}
+                d={`M ${a.x} ${a.y} Q ${cx} ${cy} ${b.x} ${b.y}`}
+                fill="none"
+                stroke="#b07830" strokeWidth="1" strokeOpacity="0.6"
+                style={{ pointerEvents: 'none' }}
+              />
+            )
+          })}
+        </g>
+      </g>
+
+      {/* Passable roads — rendered outside sepia filter so green stays vivid */}
+      {reachableCityIds != null && (
+        <g filter="url(#map-wobble)">
+          {roads.map((road, i) => {
+            const a = positions.get(road.fromCityId)
+            const b = positions.get(road.toCityId)
+            if (!a || !b) return null
+            const fromReachable = road.fromCityId === currentCityId || reachableCityIds.has(road.fromCityId)
+            const toReachable   = road.toCityId   === currentCityId || reachableCityIds.has(road.toCityId)
+            if (!fromReachable || !toReachable) return null
+            const mx = (a.x + b.x) / 2
+            const my = (a.y + b.y) / 2
+            const dx = b.x - a.x
+            const dy = b.y - a.y
+            const len = Math.sqrt(dx * dx + dy * dy) || 1
+            const sign = (road.fromCityId + road.toCityId) % 2 === 0 ? 1 : -1
+            const bendAmount = len * 0.08
+            const cx = mx + sign * (-dy / len) * bendAmount
+            const cy = my + sign * (dx / len) * bendAmount
+            return (
+              <path
+                key={`reach-${i}`}
+                d={`M ${a.x} ${a.y} Q ${cx} ${cy} ${b.x} ${b.y}`}
+                fill="none"
+                stroke="#ffffff" strokeWidth="1.5" strokeOpacity="0.55"
+                style={{ pointerEvents: 'none' }}
+              />
+            )
+          })}
+        </g>
+      )}
 
       {/* City nodes */}
       {cities.map(city => {
@@ -127,7 +197,7 @@ export default function SvgMap({ cities, roads, playerTokens, currentCityId, hom
         const isUnreachable = inMoveMode && !isReachable && !isCurrent && !isOnPath && !isHome
 
         const fill = city.ownerColor ?? '#78716c'
-        const r = isSelected ? 13 : 9
+        const r = 9
         const borderColor = isSelected  ? '#fbbf24'
                           : isOnPath    ? '#fb923c'
                           : isCurrent   ? '#ffffff'
@@ -155,6 +225,11 @@ export default function SvgMap({ cities, roads, playerTokens, currentCityId, hom
             {isReachable && !isOnPath && !isSelected && (
               <circle cx={pos.x} cy={pos.y} r={r + 6} fill="none" stroke="#4ade80" strokeWidth="1.5" strokeOpacity="0.7" />
             )}
+            {/* Coastal highlight ring — teal */}
+            {highlightCoastal && city.isCoastal && (
+              <circle cx={pos.x} cy={pos.y} r={r + 11} fill="none" stroke="#2dd4bf" strokeWidth="2"
+                strokeOpacity="0.85" />
+            )}
             {/* Home base ring — amber dashed */}
             {isHome && (
               <circle cx={pos.x} cy={pos.y} r={r + 9} fill="none" stroke="#f59e0b" strokeWidth="1.5"
@@ -164,8 +239,10 @@ export default function SvgMap({ cities, roads, playerTokens, currentCityId, hom
             {isCurrent && (
               <circle cx={pos.x} cy={pos.y} r={r + 7} fill="none" stroke="#ffffff" strokeWidth="2" strokeOpacity="0.5" />
             )}
-            <circle
-              cx={pos.x} cy={pos.y} r={r}
+            <rect
+              x={pos.x - r / Math.SQRT2} y={pos.y - r / Math.SQRT2}
+              width={r * Math.SQRT2} height={r * Math.SQRT2}
+              transform={`rotate(45, ${pos.x}, ${pos.y})`}
               fill={fill}
               stroke={borderColor}
               strokeWidth={isSelected || isCurrent || isOnPath ? 2.5 : isReachable ? 2 : 1.5}
@@ -175,7 +252,7 @@ export default function SvgMap({ cities, roads, playerTokens, currentCityId, hom
               textAnchor="middle"
               fill={labelColor}
               fontSize="7.5"
-              fontFamily="sans-serif"
+              fontFamily="'Courier New', Courier, monospace"
               fontWeight={isCurrent || isReachable || isOnPath || isHome ? 'bold' : 'normal'}
               style={{ pointerEvents: 'none' }}
             >
@@ -183,7 +260,7 @@ export default function SvgMap({ cities, roads, playerTokens, currentCityId, hom
             </text>
             {isHome && (
               <text x={pos.x} y={pos.y + 27} textAnchor="middle"
-                fill="#f59e0b" fontSize="6" fontFamily="sans-serif" style={{ pointerEvents: 'none' }}>
+                fill="#f59e0b" fontSize="6" fontFamily="'Courier New', Courier, monospace" style={{ pointerEvents: 'none' }}>
                 ⌂ HOME
               </text>
             )}
