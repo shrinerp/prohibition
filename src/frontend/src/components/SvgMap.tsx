@@ -16,7 +16,10 @@ export interface CityNode {
   lon: number
   ownerColor?: string
   isCoastal?: boolean
+  populationTier?: 'small' | 'medium' | 'large' | 'major'
 }
+
+const TIER_RADIUS: Record<string, number> = { small: 6, medium: 8, large: 10, major: 13 }
 
 export interface Road {
   fromCityId: number
@@ -197,7 +200,7 @@ export default function SvgMap({ cities, roads, playerTokens, currentCityId, hom
         const isUnreachable = inMoveMode && !isReachable && !isCurrent && !isOnPath && !isHome
 
         const fill = city.ownerColor ?? '#78716c'
-        const r = 9
+        const r = TIER_RADIUS[city.populationTier ?? 'medium'] ?? 8
         const borderColor = isSelected  ? '#fbbf24'
                           : isOnPath    ? '#fb923c'
                           : isCurrent   ? '#ffffff'

@@ -908,7 +908,8 @@ export default function GamePage() {
     ownerColor: c.owner_player_id != null
       ? PLAYER_COLORS[((fullState?.players ?? []).find(p => p.id === c.owner_player_id)?.turnOrder ?? 0) % PLAYER_COLORS.length]
       : undefined,
-    isCoastal:  c.is_coastal === 1,
+    isCoastal:       c.is_coastal === 1,
+    populationTier:  c.population_tier as 'small' | 'medium' | 'large' | 'major',
   }))
 
   const svgRoads: Road[] = mapRoads.map(r => ({
